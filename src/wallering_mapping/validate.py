@@ -41,6 +41,10 @@ def validate(root, decode=True):
             warnings.append("Synthetic IO fixture: not a photogrammetric accuracy test")
         if sha256_file(root / "calibration.json") != manifest["calibration_sha256"]:
             errors.append("Calibration checksum mismatch")
+        if manifest["status"] == "complete":
+            for name in ("frames", "imu", "events", "clock"):
+                if sha256_file(root / f"{name}.jsonl") != manifest.get("journals_sha256", {}).get(name):
+                    errors.append(f"Journal checksum mismatch: {name}")
         previous = {}
         for row in jsonl(root / "frames.jsonl"):
             stream, sequence, timestamp = row["stream"], row["sequence"], row["device_ns"]
@@ -128,4 +132,3 @@ def validate(root, decode=True):
         errors.append(str(error))
     report["valid"] = not errors
     return report
-

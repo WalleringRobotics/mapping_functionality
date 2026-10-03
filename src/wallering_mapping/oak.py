@@ -1,6 +1,7 @@
 """DepthAI 3.10 adapter. All hardware access is isolated in this module."""
 
 import signal
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -137,6 +138,7 @@ def record(root, config, duration=None, device_id=None):
                 last_received = dict.fromkeys(queues, start)
                 last_imu = {}
                 clock_due = start
+                progress_due = start
                 while not stop.is_set():
                     now = time.monotonic()
                     if duration is not None and now >= ready + duration:
@@ -146,6 +148,7 @@ def record(root, config, duration=None, device_id=None):
                         raise RuntimeError("Camera pipeline stopped unexpectedly")
                     writer.check()
                     for name, q in queues.items():
+                        rows = []
                         # Limit work per queue so images cannot starve the IMU or stop checks.
                         for _ in range(16):
                             message = q.tryGet()
@@ -158,7 +161,6 @@ def record(root, config, duration=None, device_id=None):
                                 metadata = frame_metadata(message, dai)
                                 writer.submit("frame", name, message.getCvFrame(), metadata)
                             else:
-                                rows = []
                                 for packet in message.packets:
                                     for sensor, report, unit in (
                                         ("accelerometer", packet.acceleroMeter, "m/s^2"),
@@ -178,7 +180,8 @@ def record(root, config, duration=None, device_id=None):
                                                      "xyz": [report.x, report.y, report.z],
                                                      "unit": unit, "frame": "sensor_native",
                                                      "report": "RAW"})
-                                writer.submit("imu_batch", rows)
+                        if rows:
+                            writer.submit("imu_batch", rows)
                     if now >= clock_due:
                         writer.submit("append", "clock", {
                             "host_monotonic_ns": time.monotonic_ns(),
@@ -189,6 +192,10 @@ def record(root, config, duration=None, device_id=None):
                     for name, received in last_received.items():
                         if now - received > config.stall_seconds:
                             raise RuntimeError(f"Stream {name} stalled")
+                    if now >= progress_due:
+                        print(f"recording {root}: saved={dict(session.counts)} "
+                              f"writer_queue={writer.queue.qsize()}", file=sys.stderr, flush=True)
+                        progress_due = now + 5
                     time.sleep(0.002)
         except BaseException as error:
             status, reason, failure = "failed", str(error), error
@@ -210,4 +217,3 @@ def record(root, config, duration=None, device_id=None):
         if failure:
             raise RuntimeError(reason) from failure
         return session.manifest
-

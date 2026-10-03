@@ -58,6 +58,9 @@ data. Sequence gaps are warnings to be assessed against survey overlap. Export
 requires explicit `--allow-gaps` for a selected stream with gaps. Integrity validation
 does not assert that imagery can reconstruct or meet an accuracy target.
 
+Completed manifests also seal all four journals with SHA-256, protecting timestamps
+and settings against unnoticed transfer corruption.
+
 Validation checks images, hashes, counts, decode dimensions, pixel intrinsics,
 monotonic clocks, sequences, actual rates and nearest timestamps. It reports unindexed
 images and invalid JSON tails. Hashes detect corruption, not capture authenticity.
@@ -78,4 +81,3 @@ Lens conversion supports perspective→`FULL_OPENCV` and four-coefficient
 fisheye→`OPENCV_FISHEYE`. Nonzero thin-prism/tilt terms are rejected, not discarded.
 Export requires one resolution, focus and calibration group. New camera adapters
 must honor the clock, calibration and integrity contract or version the schema.
-

@@ -64,6 +64,9 @@ class Session:
     def __init__(self, root: Path, config, source: str, device: dict, calibration: dict):
         self.root = root
         self.config = config
+        root.parent.mkdir(parents=True, exist_ok=True)
+        if shutil.disk_usage(root.parent).free < config.min_free_gib * 1024**3:
+            raise OSError("Free disk space is below min_free_gib reserve")
         root.mkdir(parents=True, exist_ok=False)
         for stream in config.streams:
             (root / "images" / stream).mkdir(parents=True)
@@ -147,6 +150,9 @@ class Session:
         self.flush()
         for file in self.logs.values():
             file.close()
+        self.manifest["journals_sha256"] = {
+            name: sha256_file(self.root / f"{name}.jsonl") for name in self.logs
+        }
         self.manifest.update(status=status, stop_reason=reason, counts=dict(self.counts),
                              finished_utc_ns=time.time_ns())
         write_json(self.root / "manifest.json", self.manifest)

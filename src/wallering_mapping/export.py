@@ -28,6 +28,8 @@ def colmap_camera(camera):
 
 
 def export(root, output, stream="rgb", interval=1.0, min_sharpness=0.0, allow_gaps=False):
+    if output.resolve().is_relative_to(root.resolve()):
+        raise ValueError("Export output must be outside the immutable source session")
     if not math.isfinite(interval) or interval < 0 or not math.isfinite(min_sharpness) or min_sharpness < 0:
         raise ValueError("interval and min_sharpness must be finite and nonnegative")
     report = validate(root)
@@ -91,4 +93,3 @@ def export(root, output, stream="rgb", interval=1.0, min_sharpness=0.0, allow_ga
         write_json(output / "project.json", metadata)
         raise
     return metadata
-

@@ -67,3 +67,12 @@ def test_path_escape(tmp_path):
     with pytest.raises(ValueError):
         safe_path(tmp_path, "../outside.png")
 
+
+def test_disk_reserve_checked_before_session_creation(tmp_path, monkeypatch):
+    import shutil
+    from collections import namedtuple
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: usage(100, 99, 1))
+    with pytest.raises(OSError, match="reserve"):
+        Session(tmp_path / "session", CaptureConfig(), "test", {}, {})
+    assert not (tmp_path / "session").exists()
