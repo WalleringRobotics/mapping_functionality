@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 
 from .dataset import AsyncWriter, Session
+from .operations import host_health
 
 
 def nanoseconds(delta):
@@ -137,6 +138,7 @@ def record(root, config, duration=None, device_id=None):
                 ready = start + config.warmup_seconds
                 last_received = dict.fromkeys(queues, start)
                 last_imu = {}
+                imu_received = dict.fromkeys(("accelerometer", "gyroscope"), ready)
                 clock_due = start
                 progress_due = start
                 while not stop.is_set():
@@ -172,6 +174,7 @@ def record(root, config, duration=None, device_id=None):
                                         if sensor in last_imu and sequence < last_imu[sensor]:
                                             raise ValueError(f"{sensor} sequence reset")
                                         last_imu[sensor] = sequence
+                                        imu_received[sensor] = time.monotonic()
                                         rows.append({"sensor": sensor, "sequence": sequence,
                                                      "device_ns": nanoseconds(report.getTimestampDevice()),
                                                      "host_synced_ns": nanoseconds(report.getTimestamp()),
@@ -193,9 +196,15 @@ def record(root, config, duration=None, device_id=None):
                         if now - received > config.stall_seconds:
                             raise RuntimeError(f"Stream {name} stalled")
                     if now >= progress_due:
+                        writer.submit("heartbeat", "warmup" if now < ready else "recording",
+                                      host_health(root), writer.queue.qsize())
                         print(f"recording {root}: saved={dict(session.counts)} "
                               f"writer_queue={writer.queue.qsize()}", file=sys.stderr, flush=True)
                         progress_due = now + 5
+                    if "imu" in queues and now >= ready:
+                        for sensor, received in imu_received.items():
+                            if now - received > config.stall_seconds:
+                                raise RuntimeError(f"IMU report {sensor} stalled")
                     time.sleep(0.002)
         except BaseException as error:
             status, reason, failure = "failed", str(error), error
@@ -212,6 +221,9 @@ def record(root, config, duration=None, device_id=None):
                 status, reason, failure = "failed", str(error), error
             if any(session.counts[s] == 0 for s in config.streams):
                 status, reason = "failed", "One or more requested streams have no saved images"
+                failure = failure or RuntimeError(reason)
+            if "imu" in queues and any(session.counts[s] == 0 for s in ("accelerometer", "gyroscope")):
+                status, reason = "failed", "Enabled IMU has no samples for one or more sensors"
                 failure = failure or RuntimeError(reason)
             session.finish(status, reason)
         if failure:

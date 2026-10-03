@@ -14,6 +14,7 @@ from pathlib import Path
 import cv2
 
 from . import __version__
+from .operations import provenance
 
 
 def atomic_bytes(path: Path, data: bytes, durable=True):
@@ -75,6 +76,7 @@ class Session:
             "schema_version": 1, "software_version": __version__, "source": source,
             "status": "recording", "started_utc_ns": time.time_ns(),
             "host": {"platform": platform.platform(), "python": platform.python_version()},
+            "provenance": provenance(),
             "config": config.to_dict(), "device": device,
             "calibration_sha256": sha256_file(root / "calibration.json"),
             "time_semantics": {
@@ -91,6 +93,7 @@ class Session:
         self.counts = Counter()
         self.sequence = {}
         self.timestamps = {}
+        self.imu_previous = {}
         self.pending = 0
         self.check_disk()
 
@@ -142,8 +145,24 @@ class Session:
 
     def imu_batch(self, rows):
         for row in rows:
+            sensor, sequence, timestamp = row["sensor"], row["sequence"], row["device_ns"]
+            if sensor in self.imu_previous:
+                previous_sequence, previous_time = self.imu_previous[sensor]
+                if sequence <= previous_sequence or timestamp <= previous_time:
+                    raise ValueError(f"Non-monotonic {sensor} sequence/time")
+                gap = sequence - previous_sequence - 1
+                if gap:
+                    self.counts[f"{sensor}_sequence_gaps"] += gap
+                    self.event("sequence_gap", stream=sensor, missing=gap)
+            self.imu_previous[sensor] = sequence, timestamp
             self.append("imu", row)
             self.counts[row["sensor"]] += 1
+
+    def heartbeat(self, phase, health, queue_size):
+        write_json(self.root / "status.json", {
+            "phase": phase, "updated_utc_ns": time.time_ns(), "counts": dict(self.counts),
+            "queue_items": queue_size, "health": health,
+        })
 
     def finish(self, status="complete", reason="requested stop"):
         self.event("stop", status=status, reason=reason)
@@ -156,6 +175,7 @@ class Session:
         self.manifest.update(status=status, stop_reason=reason, counts=dict(self.counts),
                              finished_utc_ns=time.time_ns())
         write_json(self.root / "manifest.json", self.manifest)
+        self.heartbeat(status, {}, 0)
 
 
 class AsyncWriter:

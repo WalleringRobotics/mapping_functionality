@@ -21,11 +21,20 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect", help="Probe OAK sensors, IMU and USB link")
     inspect.add_argument("--device-id")
-    record = commands.add_parser("record", help="Capture a new immutable session")
+    record = commands.add_parser("capture", aliases=["record"], help="Mode 1: onboard recording")
     record.add_argument("--config", type=Path, required=True)
     record.add_argument("--output", type=Path, required=True)
     record.add_argument("--device-id")
     record.add_argument("--duration", type=positive, help="Seconds after warmup; otherwise until Ctrl+C")
+    doctor = commands.add_parser("doctor", help="Check dependencies and output storage")
+    doctor.add_argument("--mode", choices=["capture", "process"], required=True)
+    doctor.add_argument("--config", type=Path, default=Path("configs/oakd-survey.json"))
+    doctor.add_argument("--output-root", type=Path, required=True)
+    doctor.add_argument("--probe-device", action="store_true")
+    doctor.add_argument("--device-id")
+    doctor.add_argument("--backend", choices=["building", "terrain"], default="building")
+    status = commands.add_parser("status", help="Read the recorder's current status")
+    status.add_argument("session", type=Path)
     simulate = commands.add_parser("simulate", help="Create an IO fixture without hardware")
     simulate.add_argument("--output", type=Path, required=True)
     simulate.add_argument("--frames", type=int, default=12)
@@ -62,9 +71,19 @@ def main(argv=None):
         if args.command == "inspect":
             from .oak import inspect_device
             result = inspect_device(args.device_id)
-        elif args.command == "record":
+        elif args.command in {"record", "capture"}:
             from .oak import record
             result = record(args.output, CaptureConfig.read(args.config), args.duration, args.device_id)
+        elif args.command == "doctor":
+            from .operations import doctor
+            config = CaptureConfig.read(args.config) if args.mode == "capture" else None
+            result = doctor(args.mode, args.output_root, config, args.probe_device,
+                            args.device_id, args.backend)
+            print(json.dumps(result, indent=2))
+            return 0 if result["ready"] else 2
+        elif args.command == "status":
+            from .operations import status
+            result = status(args.session)
         elif args.command == "simulate":
             from .simulate import simulate
             if args.frames < 1:
