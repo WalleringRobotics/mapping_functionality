@@ -47,6 +47,10 @@ def parser():
     sync.add_argument("--output", type=Path, required=True)
     sync.add_argument("--stream", choices=["rgb", "left", "right"], default="rgb")
     sync.add_argument("--min-fraction", type=float, default=.9)
+    ntrip = commands.add_parser("ntrip", help="Forward verified fixed-base NTRIP v2 corrections through MAVROS")
+    ntrip.add_argument("--config", type=Path, required=True)
+    ntrip.add_argument("--output", type=Path, required=True)
+    ntrip.add_argument("--duration", type=positive)
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -123,6 +127,9 @@ def main(argv=None):
             result = associate(args.session, args.output, args.stream, args.min_fraction)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
+        elif args.command == "ntrip":
+            from .ntrip import NtripConfig, bridge
+            result = bridge(NtripConfig.read(args.config), args.output, args.duration)
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,

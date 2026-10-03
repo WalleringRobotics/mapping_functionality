@@ -12,6 +12,11 @@ def default_topics():
             "time_reference": "/mavros/time_reference"}
 
 
+def rtk_topics():
+    return {"gps_raw": "/mavros/gpsstatus/gps1/raw",
+            "gps_rtk": "/mavros/gpsstatus/gps1/rtk", "rtcm": "/mavros/gps_rtk/send_rtcm"}
+
+
 @dataclass(frozen=True)
 class TelemetryConfig:
     topics: dict = field(default_factory=default_topics)
@@ -35,7 +40,8 @@ class TelemetryConfig:
     max_gnss_age_ms: float = 200
 
     def __post_init__(self):
-        if (not isinstance(self.topics, dict) or set(self.topics) != set(default_topics())
+        if (not isinstance(self.topics, dict) or not set(default_topics()) <= set(self.topics)
+                or set(self.topics) - (set(default_topics()) | set(rtk_topics()))
                 or any(not isinstance(v, str) or not v.startswith("/") or " " in v for v in self.topics.values())
                 or len(set(self.topics.values())) != len(self.topics)):
             raise ValueError("Provide distinct absolute ROS topic names for all telemetry roles")

@@ -10,7 +10,7 @@ rclpy = pytest.importorskip("rclpy")
 pytest.importorskip("mavros_msgs")
 
 from geometry_msgs.msg import PoseStamped  # noqa: E402
-from mavros_msgs.msg import State, TimesyncStatus  # noqa: E402
+from mavros_msgs.msg import GPSRAW, GPSRTK, RTCM, State, TimesyncStatus  # noqa: E402
 from rclpy.context import Context  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
@@ -18,7 +18,7 @@ from rclpy.serialization import deserialize_message  # noqa: E402
 from sensor_msgs.msg import Imu  # noqa: E402
 
 from wallering_mapping.mavros import MavrosSubscriber  # noqa: E402
-from wallering_mapping.telemetry_config import TelemetryConfig, default_topics  # noqa: E402
+from wallering_mapping.telemetry_config import TelemetryConfig, default_topics, rtk_topics  # noqa: E402
 
 
 def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
@@ -32,11 +32,13 @@ def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
     executor.add_node(node)
     stop = threading.Event()
     topics = {key: "/wr_test/" + key for key in default_topics()}
+    topics.update({key: "/wr_test/" + key for key in rtk_topics()})
     config = replace(TelemetryConfig(), topics=topics, time_node="/wr_test/time", min_sync_samples=2)
     qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.BEST_EFFORT)
     publishers = {role: node.create_publisher(cls, topics[role], qos)
                   for role, cls in {"state": State, "imu_raw": Imu, "pose": PoseStamped,
-                                    "timesync": TimesyncStatus}.items()}
+                                    "timesync": TimesyncStatus, "gps_raw": GPSRAW,
+                                    "gps_rtk": GPSRTK, "rtcm": RTCM}.items()}
     origin = time.monotonic_ns()
 
     def publish():
@@ -56,7 +58,13 @@ def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
         pose = PoseStamped()
         pose.header.stamp, pose.header.frame_id = stamp.to_msg(), "map"
         pose.pose.orientation.w = 1.0
-        for role, message in {"state": state, "imu_raw": imu, "pose": pose, "timesync": sync}.items():
+        gps, rtk, correction = GPSRAW(), GPSRTK(), RTCM()
+        gps.header.stamp = rtk.header.stamp = correction.header.stamp = stamp.to_msg()
+        gps.fix_type, gps.h_acc, gps.v_acc = 6, 10, 20
+        gps.dgps_age = 2**32 - 1
+        correction.data = [1, 2, 3]
+        for role, message in {"state": state, "imu_raw": imu, "pose": pose, "timesync": sync,
+                              "gps_raw": gps, "gps_rtk": rtk, "rtcm": correction}.items():
             publishers[role].publish(message)
 
     timer = node.create_timer(.05, publish)
@@ -86,6 +94,10 @@ def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
         assert message.angular_velocity.x == .25
         assert row["fields"]["header"]["frame_id"] == "base_link"
         assert row["ros_type"] == "sensor_msgs/msg/Imu"
+        gps_row = next(r for r in rows if r.get("role") == "gps_raw")
+        assert gps_row["fields"]["fix_type"] == 6
+        assert gps_row["fields"]["dgps_age"] == 2**32 - 1
+        assert deserialize_message(base64.b64decode(gps_row["cdr_base64"]), GPSRAW).h_acc == 10
     finally:
         if subscriber:
             subscriber.close()

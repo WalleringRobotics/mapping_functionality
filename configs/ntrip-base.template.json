@@ -1,0 +1,12 @@
+{
+  "caster_url": "https://caster.example.invalid/mapping-base",
+  "station_id": null,
+  "base_arp_ecef_m": null,
+  "base_coordinate_tolerance_m": 0.05,
+  "base_survey_evidence": null,
+  "topic": "/mavros/gps_rtk/send_rtcm",
+  "username_env": "WR_NTRIP_USERNAME",
+  "password_env": "WR_NTRIP_PASSWORD",
+  "timeout_seconds": 10,
+  "require_base_before_forwarding": true
+}
