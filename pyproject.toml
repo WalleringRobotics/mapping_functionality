@@ -12,6 +12,8 @@ dependencies = ["numpy==1.26.4", "opencv-python-headless==4.11.0.86"]
 
 [project.optional-dependencies]
 oak = ["depthai==3.10.0"]
+processing = ["pycolmap==3.12.6"]
+terrain = ["pyproj==3.7.1"]
 dev = ["pytest>=8,<9", "ruff>=0.9,<1"]
 
 [project.scripts]

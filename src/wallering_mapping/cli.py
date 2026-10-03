@@ -48,6 +48,17 @@ def parser():
     export.add_argument("--interval", type=float, default=1.0)
     export.add_argument("--min-sharpness", type=float, default=0.0)
     export.add_argument("--allow-gaps", action="store_true")
+    process = commands.add_parser("process", help="Mode 2: resumable offline photogrammetry")
+    process.add_argument("session", type=Path)
+    process.add_argument("--config", type=Path, required=True)
+    process.add_argument("--output", type=Path, required=True)
+    action = process.add_mutually_exclusive_group()
+    action.add_argument("--execute", action="store_true")
+    action.add_argument("--prepare-only", action="store_true")
+    process.add_argument("--resume", action="store_true")
+    process.add_argument("--gcp", type=Path)
+    process.add_argument("--geo", type=Path)
+    process.add_argument("--vertical-datum")
     sparse = commands.add_parser("reconstruct", help="Plan/run COLMAP sparse reconstruction")
     sparse.add_argument("project", type=Path)
     sparse.add_argument("--output", type=Path, required=True)
@@ -103,6 +114,12 @@ def main(argv=None):
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,
                             args.min_sharpness, args.allow_gaps)
+        elif args.command == "process":
+            from .process import process
+            from .process_config import ProcessConfig
+            result = process(args.session, args.output, ProcessConfig.read(args.config),
+                             args.execute, args.prepare_only, args.resume,
+                             args.gcp, args.geo, args.vertical_datum)
         elif args.command == "reconstruct":
             from .reconstruct import execute, sparse_plan
             result = sparse_plan(args.project, args.output, args.matcher, args.cpu)

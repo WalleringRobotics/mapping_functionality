@@ -3,12 +3,12 @@
 import json
 import os
 import re
-import shlex
 import subprocess
 import time
 from pathlib import Path
 
 from .dataset import safe_path, sha256_file, write_json
+from .process_utils import run_logged, termination_signals
 
 
 def load_project(project):
@@ -61,7 +61,7 @@ def sparse_plan(project, output, matcher="exhaustive", cpu=False, executable="co
 
 def dense_plan(project, model, output, max_image_size=2000, executable="colmap"):
     project, model, output = project.resolve(), model.resolve(), output.resolve()
-    load_project(project)
+    metadata = load_project(project)
     if output.is_relative_to(project) or output.is_relative_to(model):
         raise ValueError("Dense output must be outside the source project/model")
     if max_image_size < 128:
@@ -71,6 +71,7 @@ def dense_plan(project, model, output, max_image_size=2000, executable="colmap")
         raise ValueError("Select an existing binary COLMAP model directory (e.g. sparse/0)")
     return {
         "engine": "COLMAP 3.12.x (CUDA)", "kind": "dense", "source": str(project),
+        "source_type": metadata["source_type"],
         "source_project_sha256": sha256_file(project / "project.json"),
         "model": str(model), "model_sha256": {file.name: sha256_file(file) for file in model.iterdir() if file.is_file()},
         "output": str(output),
@@ -102,18 +103,15 @@ def execute(plan):
     (output / "logs").mkdir()
     if plan["kind"] == "sparse":
         (output / "sparse").mkdir()
-    else:
+    elif plan["kind"] == "dense":
         (output / "dense").mkdir()
     state = {**plan, "status": "running", "started_utc_ns": time.time_ns(),
              "engine_help": help_text, "completed_commands": 0}
     write_json(output / "run.json", state)
     try:
         for index, command in enumerate(plan["commands"]):
-            with (output / "logs" / f"{index:02d}-{command[1]}.log").open("x") as log:
-                log.write(shlex.join(command) + "\n")
-                log.flush()
-                subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
-                               env=environment, check=True)
+            with termination_signals():
+                run_logged(command, output / "logs" / f"{index:02d}-{command[1]}.log", environment)
             state["completed_commands"] += 1
             write_json(output / "run.json", state)
         if plan["kind"] == "sparse":
@@ -121,8 +119,10 @@ def execute(plan):
             if not components:
                 raise RuntimeError("COLMAP produced no registered sparse model")
             state["components"] = components
-        elif not (output / "dense/fused.ply").is_file():
-            raise RuntimeError("COLMAP produced no fused point cloud")
+        else:
+            product = output / ("mesh.ply" if plan["kind"] == "mesh" else "dense/fused.ply")
+            if not product.is_file() or product.stat().st_size == 0:
+                raise RuntimeError("COLMAP produced no nonempty output product")
         state["status"] = "complete"
     except BaseException as error:
         state.update(status="failed", error=str(error))
@@ -132,3 +132,13 @@ def execute(plan):
         write_json(output / "run.json", state)
     return state
 
+
+
+def mesh_plan(cloud, output, executable="colmap"):
+    cloud, output = cloud.resolve(), output.resolve()
+    if not cloud.is_file() or cloud.stat().st_size == 0:
+        raise ValueError("Meshing requires a nonempty fused point cloud")
+    return {"engine": "COLMAP 3.12.x", "kind": "mesh", "output": str(output),
+            "source": str(cloud), "source_sha256": sha256_file(cloud),
+            "commands": [[executable, "poisson_mesher", "--input_path", str(cloud),
+                          "--output_path", str(output / "mesh.ply")]]}

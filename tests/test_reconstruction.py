@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 
 import pytest
 
@@ -41,14 +42,13 @@ def test_execute_failure_is_logged(project, tmp_path, monkeypatch):
     metadata["source_type"] = "test"
     manifest.write_text(json.dumps(metadata))
     output = tmp_path / "result"
-    plan = sparse_plan(project, output)
+    engine = tmp_path / "fake-colmap"
+    engine.write_text(f"#!{sys.executable}\nimport sys\n"
+                      "if sys.argv[-1] == '-h': print('COLMAP 3.12.6')\n"
+                      "else: print('controlled failure'); sys.exit(1)\n")
+    engine.chmod(0o755)
+    plan = sparse_plan(project, output, executable=str(engine))
 
-    def run(command, **kwargs):
-        if command[-1] == "-h":
-            return subprocess.CompletedProcess(command, 0, "COLMAP 3.12.6", "")
-        raise subprocess.CalledProcessError(1, command)
-
-    monkeypatch.setattr(subprocess, "run", run)
     with pytest.raises(subprocess.CalledProcessError):
         execute(plan)
     assert json.loads((output / "run.json").read_text())["status"] == "failed"
