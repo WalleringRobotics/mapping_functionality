@@ -25,6 +25,7 @@ def parser():
     record.add_argument("--config", type=Path, required=True)
     record.add_argument("--output", type=Path, required=True)
     record.add_argument("--device-id")
+    record.add_argument("--telemetry-config", type=Path, help="Subscribe to the existing PX4/MAVROS connector")
     record.add_argument("--duration", type=positive, help="Seconds after warmup; otherwise until Ctrl+C")
     doctor = commands.add_parser("doctor", help="Check dependencies and output storage")
     doctor.add_argument("--mode", choices=["capture", "process"], required=True)
@@ -41,6 +42,11 @@ def parser():
     validate = commands.add_parser("validate", help="Audit dataset integrity, gaps and timing")
     validate.add_argument("session", type=Path)
     validate.add_argument("--report", type=Path)
+    sync = commands.add_parser("sync", help="Audit exposure-to-PX4 timing and associate vehicle poses")
+    sync.add_argument("session", type=Path)
+    sync.add_argument("--output", type=Path, required=True)
+    sync.add_argument("--stream", choices=["rgb", "left", "right"], default="rgb")
+    sync.add_argument("--min-fraction", type=float, default=.9)
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -84,7 +90,9 @@ def main(argv=None):
             result = inspect_device(args.device_id)
         elif args.command in {"record", "capture"}:
             from .oak import record
-            result = record(args.output, CaptureConfig.read(args.config), args.duration, args.device_id)
+            from .telemetry_config import TelemetryConfig
+            telemetry = TelemetryConfig.read(args.telemetry_config) if args.telemetry_config else None
+            result = record(args.output, CaptureConfig.read(args.config), args.duration, args.device_id, telemetry)
         elif args.command == "doctor":
             from .operations import doctor
             config = CaptureConfig.read(args.config) if args.mode == "capture" else None
@@ -110,6 +118,11 @@ def main(argv=None):
                 write_json(args.report, result)
             print(json.dumps(result, indent=2))
             return 0 if result["valid"] else 2
+        elif args.command == "sync":
+            from .association import associate
+            result = associate(args.session, args.output, args.stream, args.min_fraction)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,

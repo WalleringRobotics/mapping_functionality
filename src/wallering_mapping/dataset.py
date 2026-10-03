@@ -62,7 +62,7 @@ def jsonl(path: Path):
 
 
 class Session:
-    def __init__(self, root: Path, config, source: str, device: dict, calibration: dict):
+    def __init__(self, root: Path, config, source: str, device: dict, calibration: dict, telemetry=None):
         self.root = root
         self.config = config
         root.parent.mkdir(parents=True, exist_ok=True)
@@ -87,9 +87,12 @@ class Session:
                 "precision": "ns units; Python timedelta resolution is microseconds",
             },
         }
+        journals = ["frames", "imu", "events", "clock"]
+        if telemetry is not None:
+            self.manifest["telemetry"] = telemetry
+            journals.append("telemetry")
         write_json(root / "manifest.json", self.manifest)
-        self.logs = {name: (root / f"{name}.jsonl").open("x")
-                     for name in ("frames", "imu", "events", "clock")}
+        self.logs = {name: (root / f"{name}.jsonl").open("x") for name in journals}
         self.counts = Counter()
         self.sequence = {}
         self.timestamps = {}
@@ -157,6 +160,16 @@ class Session:
             self.imu_previous[sensor] = sequence, timestamp
             self.append("imu", row)
             self.counts[row["sensor"]] += 1
+
+    def telemetry_batch(self, rows):
+        self.check_disk()
+        for row in rows:
+            self.logs["telemetry"].write(json.dumps(row, allow_nan=False) + "\n")
+            key = "telemetry_clock" if row["record_type"] == "clock" else "telemetry_" + row["role"]
+            self.counts[key] += 1
+            self.pending += 1
+        if self.pending >= self.config.fsync_every:
+            self.flush()
 
     def heartbeat(self, phase, health, queue_size):
         write_json(self.root / "status.json", {
