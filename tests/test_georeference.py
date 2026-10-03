@@ -4,10 +4,13 @@ import numpy as np
 import pytest
 
 from test_processing import synthesized_model
+from test_map_accuracy import inputs
 from wallering_mapping.dataset import jsonl, sha256_file, write_json
 from wallering_mapping.export import export
 from wallering_mapping.georeference import georeference, similarity, transform_ply
 from wallering_mapping.model import pycolmap
+from wallering_mapping.map_accuracy import assess
+from wallering_mapping.process_utils import inventory
 from wallering_mapping.simulate import simulate
 
 
@@ -79,7 +82,8 @@ def test_real_colmap_binary_and_ascii_product_alignment_keeps_local_precision(tm
     source, project = tmp_path / "capture", tmp_path / "project"
     simulate(source, 10)
     export(source, project, interval=0)
-    model = tmp_path / "model"
+    workflow = tmp_path / "workflow"
+    model = workflow / "model"
     recon = synthesized_model(project, model)
     metadata = json.loads((project / "project.json").read_text())
     accuracy = tmp_path / "image-accuracy"
@@ -119,7 +123,7 @@ def test_real_colmap_binary_and_ascii_product_alignment_keeps_local_precision(tm
             "vertical_datum": "WGS84 ellipsoidal height",
         },
     )
-    cloud = tmp_path / "cloud.ply"
+    cloud = workflow / "cloud.ply"
     cloud.write_text(
         "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n1 2 3\n4 5 6\n7 8 9\n3 0 1 2\n"
     )
@@ -143,3 +147,40 @@ def test_real_colmap_binary_and_ascii_product_alignment_keeps_local_precision(tm
         for row in __import__("csv").DictReader((output / "camera-controls.csv").open())
     )
     assert list(jsonl(accuracy / "images.jsonl")) == rows
+    # Use the same sealed products and model inventory as a completed building run.
+    (workflow / "camera-poses.csv").write_text("synthetic metadata\n")
+    (workflow / "quality.json").write_text("{}\n")
+    products = list(model.glob("*.bin")) + [
+        cloud,
+        workflow / "camera-poses.csv",
+        workflow / "quality.json",
+    ]
+    state = {
+        "status": "complete",
+        "inputs": {
+            "manifest_sha256": metadata["source_manifest_sha256"],
+            "config": {"product": "building"},
+        },
+        "stages": {
+            "sparse": [
+                {
+                    "status": "complete",
+                    "path": "model",
+                    "artifacts": inventory(model, model.glob("*.bin")),
+                }
+            ]
+        },
+        "products": inventory(workflow, products),
+    }
+    write_json(workflow / "workflow.json", state)
+    checks, profile_path = inputs(tmp_path)
+    checked = assess(checks, profile_path, tmp_path / "map-report", accuracy, workflow, output)
+    assert checked["passed"] and checked["workflow_sha256"]
+    assert "building alignment control" in checked["navigation_use"]
+    # A PLY omitted from the transformation cannot masquerade as a metric product.
+    omitted = workflow / "mesh.ply"
+    omitted.write_bytes(cloud.read_bytes())
+    state["products"] = inventory(workflow, products + [omitted])
+    write_json(workflow / "workflow.json", state)
+    with pytest.raises(ValueError, match="does not cover"):
+        assess(checks, profile_path, tmp_path / "invalid-map-report", accuracy, workflow, output)

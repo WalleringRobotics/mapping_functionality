@@ -21,6 +21,8 @@ from wallering_mapping.gnss_accuracy import (
 from wallering_mapping.mavros import TelemetryBuffer
 from wallering_mapping.telemetry_config import TelemetryConfig, rtk_topics
 from wallering_mapping.validate import validate
+from wallering_mapping.cli import main
+from wallering_mapping.export import export
 
 
 def rtk_fixture(tmp_path, age=20, mode="px4_boot_via_mavros"):
@@ -210,6 +212,66 @@ def test_primary_mavros_unknown_correction_age_is_not_silently_accepted(tmp_path
     rows = list(jsonl(tmp_path / "accuracy/images.jsonl"))
     assert all("Receiver correction age is required" in ";".join(row["reasons"]) for row in rows)
     assert all(row["receiver_correction_age_ms"] is None for row in rows)
+
+
+def test_cli_qualified_camera_geolocation_reaches_calibrated_odm_inputs(tmp_path, capsys):
+    root, alignment, profile = rtk_fixture(tmp_path)
+    project, accuracy, run = (tmp_path / p for p in ("project", "accuracy", "terrain-run"))
+    metadata = export(root, project, interval=0.5)
+    assert (
+        main(
+            [
+                "image-accuracy",
+                str(root),
+                "--alignment",
+                str(alignment),
+                "--profile",
+                str(profile),
+                "--project",
+                str(project),
+                "--output",
+                str(accuracy),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    recipe = tmp_path / "terrain.json"
+    write_json(recipe, {"product": "terrain", "interval_seconds": 0.5, "gps_accuracy_m": 0.1})
+    assert (
+        main(
+            [
+                "process",
+                str(root),
+                "--config",
+                str(recipe),
+                "--output",
+                str(run),
+                "--geo",
+                str(accuracy / "camera-geo.txt"),
+                "--vertical-datum",
+                "WGS84 ellipsoidal height",
+                "--prepare-only",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    workflow = json.loads((run / "workflow.json").read_text())
+    prepared = run / workflow["stages"]["terrain-input"][-1]["path"]
+    original_geo = (accuracy / "camera-geo.txt").read_text().splitlines()
+    derived_geo = (prepared / "site/geo.txt").read_text().splitlines()
+    assert original_geo[0] == derived_geo[0] == "EPSG:32633"
+    assert len(derived_geo) == len(metadata["images"]) + 1
+    for before, after in zip(original_geo[1:], derived_geo[1:], strict=True):
+        assert after.split()[0].endswith(".png")
+        np.testing.assert_allclose(
+            list(map(float, before.split()[1:])),
+            list(map(float, after.split()[1:])),
+            atol=1e-8,
+            rtol=0,
+        )
+    assert workflow["inputs"]["config"]["gps_accuracy_m"] == 0.1
 
 
 def test_explicit_transport_only_policy_keeps_receiver_age_limitation(tmp_path):

@@ -3,6 +3,7 @@
 import csv
 import html
 import json
+from pathlib import Path
 
 import numpy as np
 
@@ -149,9 +150,15 @@ def assess(
             if workflow_data["inputs"]["manifest_sha256"] != georef["source_manifest_sha256"]:
                 raise ValueError("Georeference and workflow refer to different captures")
             transformed = {(item["path"], item["sha256"]) for item in georef["source_artifacts"]}
+            transformed |= {
+                (str((Path(georef["source_model_path"]) / name).resolve()), digest)
+                for name, digest in georef["source_model_hashes"].items()
+            }
             if any(
                 (str((workflow / item["path"]).resolve()), item["sha256"]) not in transformed
                 for item in workflow_data["products"]
+                if Path(item["path"]).name
+                not in ("camera-poses.csv", "quality.json", "project.ini")
             ):
                 raise ValueError("Georeference does not cover all sealed workflow products")
     if (
@@ -239,6 +246,18 @@ def assess(
             image_accuracy / "report.json"
         ):
             raise ValueError("Georeference used a different image accuracy report")
+    navigation_use = None
+    if images:
+        navigation_use = "Supplemental capture evidence; reconstruction use not established"
+        if georef:
+            navigation_use = "Qualified camera positions used as building alignment control"
+        elif (
+            workflow_data
+            and workflow_data["inputs"].get("geo_sha256")
+            == images["output_hashes"].get("camera-geo.txt")
+            and workflow_data["inputs"].get("geo_sha256")
+        ):
+            navigation_use = "Qualified camera geolocation supplied to terrain reconstruction"
     xy_min, xy_max = reference[:, :2].min(axis=0), reference[:, :2].max(axis=0)
     coverage = {
         "checkpoint_extent_min_xy_m": xy_min.tolist(),
@@ -296,6 +315,7 @@ def assess(
         "alignment": "No transformation fitted using these checkpoints; all supplied coordinates must be pre-aligned",
         "control_ids_checked": sorted(controls),
         "reconstruction_quality": workflow_data.get("quality") if workflow_data else None,
+        "navigation_use": navigation_use,
         "image_navigation_summary": {
             k: images.get(k)
             for k in (
@@ -363,8 +383,24 @@ def assess(
     page += (
         "<table><tr><th>Quantity</th><th>Metres</th></tr>"
         + cells
-        + "</table><h2>How to read this</h2>"
+        + "</table><h2>Axis breakdown</h2><table><tr><th>Quantity (m)</th><th>X</th><th>Y</th><th>Z</th></tr>"
     )
+    for label, values in (
+        ("Signed observed bias", measured["bias_xyz_m"]),
+        ("Observed residual RMS", measured["rmse_axes_m"]),
+        ("Centred residual RMS", measured["centred_rmse_axes_m"]),
+        ("Reference survey sigma RMS", np.sqrt(reference_variance)),
+        ("Separate shared-base sigma", np.sqrt(np.maximum(0, np.diag(shared)))),
+        ("Reference-aware indicative RMS envelope", envelope_axes),
+    ):
+        page += (
+            "<tr><td>"
+            + html.escape(label)
+            + "</td>"
+            + "".join("<td>" + number(v) + "</td>" for v in values)
+            + "</tr>"
+        )
+    page += "</table><h2>How to read this</h2>"
     page += (
         "<p>"
         + html.escape(report["same_base_limit"])
@@ -376,13 +412,22 @@ def assess(
     )
     page += "<p>Camera-position uncertainty, reconstruction residuals and measured checkpoint errors are different quantities. Their component terms must not be summed again into an invented total accuracy.</p>"
     page += (
+        "<p>"
+        + html.escape(report["indicative_reference_aware_rmse_envelope"]["meaning"])
+        + "</p><h2>Coverage</h2><pre>"
+        + html.escape(json.dumps(coverage, indent=2))
+        + "</pre>"
+    )
+    page += (
         '<p><a href="checkpoints.csv">Individual checkpoint errors</a> · <a href="report.json">Full breakdown and evidence</a></p><h2>Surface classes</h2><pre>'
         + html.escape(json.dumps(groups, indent=2))
         + "</pre>"
     )
     if images:
         page += (
-            "<h2>Image navigation evidence</h2><pre>"
+            "<h2>Image navigation evidence</h2><p>"
+            + html.escape(navigation_use)
+            + "</p><pre>"
             + html.escape(json.dumps(report["image_navigation_summary"], indent=2))
             + "</pre>"
         )

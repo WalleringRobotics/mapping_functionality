@@ -4,6 +4,12 @@ This change is stacked on the capture/postprocessing foundation. It uses the
 existing MAVROS companion link from `drone_autonomy_platform`; that process owns
 TELEM2/UART and MAVLink TIMESYNC. The mapping recorder subscribes through ROS 2.
 
+The stacked [RTK accuracy integration](rtk-accuracy.md) adds surveyed-base NTRIP
+forwarding through the existing MAVROS `gps_rtk` plugin, raw rover evidence,
+qualified camera geolocation and map error reporting. The recorder itself remains
+receive-only. GPSRAW's UTC/boot header convention requires the additional check
+described there; pose timestamp qualification does not establish GNSS timestamps.
+
 ## Source contracts reviewed
 
 - [Platform PX4 wiring](https://github.com/Darainer/drone_autonomy_platform/blob/bae4cf7ce84fc79fcdd235ee6919c64eca7a0e34/docs/architecture/px4_setup.md): TELEM2 to Orin, nominal `/dev/ttyUSB0` at 921600 baud, existing MAVROS.

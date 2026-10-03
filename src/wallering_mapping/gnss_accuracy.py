@@ -424,8 +424,11 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
     selected = None
     if project:
         metadata = load_project(project)
-        if metadata["source_manifest_sha256"] != source_hash:
-            raise ValueError("Selected image project belongs to another capture")
+        if (
+            metadata["source_manifest_sha256"] != source_hash
+            or metadata["stream"] != alignment_report["stream"]
+        ):
+            raise ValueError("Selected image project belongs to another capture/stream")
         selected = {image["name"] for image in metadata["images"]}
     base, receiver, rig, motion, policy = (
         profile[k] for k in ("base", "receiver", "rig", "motion", "policy")

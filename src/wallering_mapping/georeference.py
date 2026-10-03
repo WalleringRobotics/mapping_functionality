@@ -253,9 +253,9 @@ def georeference(project, model, image_accuracy, output, artifacts=(), max_resid
         p.suffix.lower() != ".ply" for p in artifacts
     ):
         raise ValueError("Provide distinct named PLY products from this same COLMAP world")
-    model_sources = {
-        name: sha256_file(model / name) for name in ("cameras.bin", "images.bin", "points3D.bin")
-    }
+    model_names = ["cameras.bin", "images.bin", "points3D.bin"]
+    model_names += [name for name in ("rigs.bin", "frames.bin") if (model / name).exists()]
+    model_sources = {name: sha256_file(model / name) for name in model_names}
     product_sources = [{"path": str(p), "sha256": sha256_file(p)} for p in artifacts]
     output.mkdir(parents=True, exist_ok=False)
     result = {
@@ -264,6 +264,7 @@ def georeference(project, model, image_accuracy, output, artifacts=(), max_resid
         "source_manifest_sha256": metadata["source_manifest_sha256"],
         "image_accuracy_report_sha256": sha256_file(image_accuracy / "report.json"),
         "source_model_hashes": model_sources,
+        "source_model_path": str(model),
         "source_artifacts": product_sources,
         "crs": report["profile"]["policy"]["output_crs"],
         "vertical_datum": report["vertical_datum"],
