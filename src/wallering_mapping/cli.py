@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,6 +39,20 @@ def parser():
     export.add_argument("--interval", type=float, default=1.0)
     export.add_argument("--min-sharpness", type=float, default=0.0)
     export.add_argument("--allow-gaps", action="store_true")
+    sparse = commands.add_parser("reconstruct", help="Plan/run COLMAP sparse reconstruction")
+    sparse.add_argument("project", type=Path)
+    sparse.add_argument("--output", type=Path, required=True)
+    sparse.add_argument("--matcher", choices=["exhaustive", "sequential"], default="exhaustive")
+    sparse.add_argument("--cpu", action="store_true")
+    sparse.add_argument("--execute", action="store_true")
+    dense = commands.add_parser("dense", help="Plan/run MVS for an explicitly selected sparse model")
+    dense.add_argument("project", type=Path)
+    dense.add_argument("--model", type=Path, required=True)
+    dense.add_argument("--output", type=Path, required=True)
+    dense.add_argument("--max-image-size", type=int, default=2000)
+    dense.add_argument("--execute", action="store_true")
+    accuracy = commands.add_parser("accuracy", help="Report independent checkpoint residuals")
+    accuracy.add_argument("checkpoints", type=Path)
     return result
 
 
@@ -69,9 +84,23 @@ def main(argv=None):
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,
                             args.min_sharpness, args.allow_gaps)
+        elif args.command == "reconstruct":
+            from .reconstruct import execute, sparse_plan
+            result = sparse_plan(args.project, args.output, args.matcher, args.cpu)
+            if args.execute:
+                result = execute(result)
+        elif args.command == "dense":
+            from .reconstruct import dense_plan, execute
+            result = dense_plan(args.project, args.model, args.output, args.max_image_size)
+            if args.execute:
+                result = execute(result)
+        elif args.command == "accuracy":
+            from .accuracy import checkpoints
+            result = checkpoints(args.checkpoints)
         print(json.dumps(result, indent=2))
         return 0
-    except (OSError, ValueError, RuntimeError, ImportError, TypeError) as error:
+    except (OSError, ValueError, RuntimeError, ImportError, TypeError, KeyError,
+            subprocess.CalledProcessError) as error:
         print(f"wr-map: {error}", file=sys.stderr)
         return 2
 
