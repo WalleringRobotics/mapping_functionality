@@ -23,6 +23,8 @@ def audit_telemetry(root, manifest):
     connected = False
     for row in jsonl(root / "telemetry.jsonl"):
         if row["record_type"] == "clock":
+            if row["target"] != "ros_system":
+                raise ValueError("Invalid periodic ROS clock domain")
             tracker.observe(row)
             counts["telemetry_clock"] += 1
             continue

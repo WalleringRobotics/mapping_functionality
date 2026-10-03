@@ -21,7 +21,14 @@ class ClockTracker:
         self.jump_ns = int(jump_ms * 1e6)
 
     def observe(self, sample):
+        if (sample["reference"] != "python_monotonic"
+                or sample["target"] not in {"ros_system", "depthai_steady"}
+                or any(type(sample[key]) is not int or sample[key] < 0
+                       for key in ("reference_ns", "target_ns", "bracket_ns"))):
+            raise ValueError("Invalid clock bridge domain/value")
         if self.previous:
+            if sample["target"] != self.previous["target"]:
+                raise ValueError("Clock bridge domain changed")
             dm = sample["reference_ns"] - self.previous["reference_ns"]
             dc = sample["target_ns"] - self.previous["target_ns"]
             allowance = (sample["bracket_ns"] + self.previous["bracket_ns"]) // 2
@@ -44,7 +51,8 @@ class SyncMonitor:
             raise ValueError("MAVROS time plugin must use timesync_mode=MAVLINK")
         window = parameters.get("convergence_window")
         max_rtt = parameters.get("max_rtt_sample")
-        if type(window) is not int or window < 1 or type(max_rtt) not in (int, float) or max_rtt <= 0:
+        if (type(window) is not int or window < 1 or type(max_rtt) not in (int, float)
+                or not math.isfinite(max_rtt) or max_rtt <= 0):
             raise ValueError("Missing/invalid MAVROS time-plugin parameters")
         self.minimum = max(config.min_sync_samples, window + 1)
         self.max_rtt = min(config.max_rtt_ms, max_rtt)
