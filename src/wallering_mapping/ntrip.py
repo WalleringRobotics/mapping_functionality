@@ -32,13 +32,24 @@ class NtripConfig:
 
     def __post_init__(self):
         url = urllib.parse.urlsplit(self.caster_url)
-        if (url.scheme not in {"http", "https"} or not url.hostname or not url.path.strip("/")
-                or url.username or url.password or url.query or url.fragment):
+        if (
+            url.scheme not in {"http", "https"}
+            or not url.hostname
+            or not url.path.strip("/")
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+        ):
             raise ValueError("Use an HTTP(S) mountpoint URL without credentials/query/fragment")
         if type(self.station_id) is not int or not 0 <= self.station_id <= 4095:
             raise ValueError("Expected RTCM station_id must be an integer in [0,4095]")
         point = np.asarray(self.base_arp_ecef_m, float)
-        if point.shape != (3,) or not np.isfinite(point).all() or not 6e6 < np.linalg.norm(point) < 7e6:
+        if (
+            point.shape != (3,)
+            or not np.isfinite(point).all()
+            or not 6e6 < np.linalg.norm(point) < 7e6
+        ):
             raise ValueError("Provide surveyed base ARP ECEF coordinates in metres")
         for value in (self.base_coordinate_tolerance_m, self.timeout_seconds):
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
@@ -46,7 +57,9 @@ class NtripConfig:
         if not self.base_survey_evidence.strip() or not self.topic.startswith("/"):
             raise ValueError("Provide base survey evidence and an absolute MAVROS RTCM topic")
         if self.require_base_before_forwarding is not True:
-            raise ValueError("This fixed-base adapter requires station-coordinate verification before forwarding")
+            raise ValueError(
+                "This fixed-base adapter requires station-coordinate verification before forwarding"
+            )
 
     @classmethod
     def read(cls, path):
@@ -64,7 +77,9 @@ class BaseGuard:
         if "station_id" in details and details["station_id"] != self.config.station_id:
             raise ValueError("RTCM station ID differs from configured surveyed base")
         if "base_arp_ecef_m" in details:
-            discrepancy = np.linalg.norm(np.asarray(details["base_arp_ecef_m"]) - self.config.base_arp_ecef_m)
+            discrepancy = np.linalg.norm(
+                np.asarray(details["base_arp_ecef_m"]) - self.config.base_arp_ecef_m
+            )
             if discrepancy > self.config.base_coordinate_tolerance_m:
                 raise ValueError("RTCM base ARP coordinates differ from surveyed reference")
             self.last_base = {**details, "coordinate_difference_m": float(discrepancy)}
@@ -74,13 +89,19 @@ class BaseGuard:
 
 def request(config):
     username, password = os.environ.get(config.username_env), os.environ.get(config.password_env)
-    headers = {"Ntrip-Version": "Ntrip/2.0", "User-Agent": "NTRIP wallering-mapping/0.1", "Accept": "*/*"}
+    headers = {
+        "Ntrip-Version": "Ntrip/2.0",
+        "User-Agent": "NTRIP wallering-mapping/0.1",
+        "Accept": "*/*",
+    }
     if bool(username) != bool(password):
         raise ValueError("Provide both NTRIP credential environment variables, or neither")
     if username:
         if not config.caster_url.startswith("https://"):
             raise ValueError("Authenticated NTRIP requires HTTPS to protect credentials")
-        headers["Authorization"] = "Basic " + base64.b64encode((username + ":" + password).encode()).decode()
+        headers["Authorization"] = (
+            "Basic " + base64.b64encode((username + ":" + password).encode()).decode()
+        )
     return urllib.request.Request(config.caster_url, headers=headers)
 
 
@@ -98,9 +119,15 @@ def bridge(config, output, duration=None):
 
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    report = {"schema_version": 1, "status": "starting", "config": asdict(config),
-              "started_utc_ns": time.time_ns(), "frames": 0, "forwarded_chunks": 0,
-              "receiver_applied_corrections": "Not observable; verify rover status separately"}
+    report = {
+        "schema_version": 1,
+        "status": "starting",
+        "config": asdict(config),
+        "started_utc_ns": time.time_ns(),
+        "frames": 0,
+        "forwarded_chunks": 0,
+        "receiver_applied_corrections": "Not observable; verify rover status separately",
+    }
     write_json(output / "report.json", report)
     context, node = Context(), None
     try:
@@ -111,13 +138,16 @@ def bridge(config, output, duration=None):
         while publisher.get_subscription_count() == 0:
             if time.monotonic() >= discovery_deadline:
                 raise RuntimeError("No ROS subscriber for the configured MAVROS RTCM input")
-            rclpy.spin_once(node, timeout_sec=.1)
+            rclpy.spin_once(node, timeout_sec=0.1)
         guard, decoder = BaseGuard(config), RTCMStream()
         opener = urllib.request.build_opener(NoRedirect)
         # A stalled/closed stream fails rather than silently stitching different bases.
-        with opener.open(request(config), timeout=config.timeout_seconds) as response, \
-                (output / "corrections.rtcm3").open("xb") as raw, \
-                (output / "events.jsonl").open("x") as events, stop_signals() as stop:
+        with (
+            opener.open(request(config), timeout=config.timeout_seconds) as response,
+            (output / "corrections.rtcm3").open("xb") as raw,
+            (output / "events.jsonl").open("x") as events,
+            stop_signals() as stop,
+        ):
             if response.status != 200:
                 raise ValueError("NTRIP caster did not return HTTP 200")
             report["status"] = "forwarding"
@@ -130,7 +160,9 @@ def bridge(config, output, duration=None):
                 for frame in decoder.feed(data):
                     details, allowed = guard.check(frame)
                     if not allowed and time.monotonic() - start > config.timeout_seconds:
-                        raise RuntimeError("No surveyed-base RTCM 1005/1006 verification before deadline")
+                        raise RuntimeError(
+                            "No surveyed-base RTCM 1005/1006 verification before deadline"
+                        )
                     if allowed:
                         for chunk in mavros_chunks(frame):
                             message = RTCM()
@@ -141,12 +173,25 @@ def bridge(config, output, duration=None):
                     raw.write(frame)
                     raw.flush()
                     os.fsync(raw.fileno())
-                    events.write(json.dumps({**details, "received_monotonic_ns": time.monotonic_ns(),
-                                            "received_utc_ns": time.time_ns(), "forwarded": allowed}) + "\n")
+                    events.write(
+                        json.dumps(
+                            {
+                                **details,
+                                "received_monotonic_ns": time.monotonic_ns(),
+                                "received_utc_ns": time.time_ns(),
+                                "forwarded": allowed,
+                            }
+                        )
+                        + "\n"
+                    )
                     events.flush()
                     os.fsync(events.fileno())
-                    report.update(frames=report["frames"] + 1, base=guard.last_base,
-                                  updated_utc_ns=time.time_ns(), discarded_bytes=decoder.discarded_bytes)
+                    report.update(
+                        frames=report["frames"] + 1,
+                        base=guard.last_base,
+                        updated_utc_ns=time.time_ns(),
+                        discarded_bytes=decoder.discarded_bytes,
+                    )
                     write_json(output / "report.json", report)
             if not guard.verified or not report["forwarded_chunks"]:
                 raise RuntimeError("No verified surveyed-base correction interval was forwarded")
@@ -154,14 +199,19 @@ def bridge(config, output, duration=None):
     except BaseException as error:
         report.update(status="failed", error=type(error).__name__)
         # Do not write credential-bearing HTTP exception text to public logs.
-        raise RuntimeError("NTRIP forwarding failed; inspect status, caster/base settings and private credentials") from None
+        raise RuntimeError(
+            "NTRIP forwarding failed; inspect status, caster/base settings and private credentials"
+        ) from None
     finally:
         if node:
             node.destroy_node()
         if context.ok():
             context.shutdown()
         report["finished_utc_ns"] = time.time_ns()
-        report["sha256"] = {p.name: sha256_file(p) for p in output.iterdir()
-                            if p.is_file() and p.name != "report.json"}
+        report["sha256"] = {
+            p.name: sha256_file(p)
+            for p in output.iterdir()
+            if p.is_file() and p.name != "report.json"
+        }
         write_json(output / "report.json", report)
     return report

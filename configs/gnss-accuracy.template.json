@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "base": {
+    "station_id": null,
+    "wgs84_lat_lon_h": null,
+    "covariance_enu_m2": null,
+    "survey_evidence": null,
+    "datum_epoch_evidence": null,
+    "position_reference": "ARP",
+    "rover_uncertainty_includes_base": null,
+    "rtcm_coordinate_tolerance_m": 0.05
+  },
+  "receiver": {
+    "model_firmware_evidence": null,
+    "gpsraw_time_mode": "unknown",
+    "timestamp_validation_evidence": null,
+    "horizontal_accuracy_model": "unknown",
+    "vertical_accuracy_model": "unknown",
+    "accuracy_validation_evidence": null,
+    "ellipsoidal_height_verified": false,
+    "correction_age_field_verified": false
+  },
+  "rig": {
+    "antenna_to_camera_flu_m": null,
+    "lever_covariance_flu_m2": null,
+    "attitude_sigma_rad": null,
+    "calibration_evidence": null,
+    "orientation_in_base_tangent_enu_verified": false
+  },
+  "motion": {
+    "speed_bound_m_s": null,
+    "angular_rate_bound_rad_s": null,
+    "receiver_latency_bound_ms": null,
+    "camera_latency_bound_ms": null,
+    "bound_validation_evidence": null
+  },
+  "policy": {
+    "max_gnss_age_ms": 200,
+    "max_transport_age_seconds": 2,
+    "max_base_distance_m": 5000,
+    "max_receiver_correction_age_ms": 5000,
+    "require_receiver_correction_age": true,
+    "horizontal_limit_m": 0.1,
+    "vertical_limit_m": 0.15,
+    "min_qualified_fraction": 0.9,
+    "output_crs": null
+  }
+}

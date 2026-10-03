@@ -81,7 +81,9 @@ def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
         assert subscriber.buffer.parameters["timesync_mode"] == "MAVLINK"
         subscriber.start()
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not subscriber.buffer.monitor.ever_qualified:
+        while time.monotonic() < deadline and not (
+                subscriber.buffer.monitor.ever_qualified and subscriber.buffer.tracker.previous
+                and all(subscriber.buffer.counts[r] >= 2 for r in rtk_topics())):
             subscriber.buffer.check()
             time.sleep(.05)
         subscriber.close()

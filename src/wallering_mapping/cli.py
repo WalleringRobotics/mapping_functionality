@@ -51,6 +51,18 @@ def parser():
     ntrip.add_argument("--config", type=Path, required=True)
     ntrip.add_argument("--output", type=Path, required=True)
     ntrip.add_argument("--duration", type=positive)
+    images_accuracy = commands.add_parser("image-accuracy", help="Report corrected-GNSS camera uncertainty and qualified geolocation")
+    images_accuracy.add_argument("session", type=Path)
+    images_accuracy.add_argument("--alignment", type=Path, required=True)
+    images_accuracy.add_argument("--profile", type=Path, required=True)
+    images_accuracy.add_argument("--output", type=Path, required=True)
+    images_accuracy.add_argument("--project", type=Path, help="Restrict geolocation to an existing selected image export")
+    map_accuracy = commands.add_parser("map-accuracy", help="Assess withheld checkpoints and reference-aware map accuracy")
+    map_accuracy.add_argument("checkpoints", type=Path)
+    map_accuracy.add_argument("--profile", type=Path, required=True)
+    map_accuracy.add_argument("--output", type=Path, required=True)
+    map_accuracy.add_argument("--image-accuracy", type=Path)
+    map_accuracy.add_argument("--workflow", type=Path)
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -130,6 +142,16 @@ def main(argv=None):
         elif args.command == "ntrip":
             from .ntrip import NtripConfig, bridge
             result = bridge(NtripConfig.read(args.config), args.output, args.duration)
+        elif args.command == "image-accuracy":
+            from .gnss_accuracy import image_accuracy
+            result = image_accuracy(args.session, args.alignment, args.profile, args.output, args.project)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "map-accuracy":
+            from .map_accuracy import assess
+            result = assess(args.checkpoints, args.profile, args.output, args.image_accuracy, args.workflow)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,
