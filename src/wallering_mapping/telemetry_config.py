@@ -30,6 +30,7 @@ class TelemetryConfig:
     max_sync_age_ms: float = 500
     max_pose_bracket_ms: float = 50
     sdk_sync_budget_ms: float = 1
+    px4_timestamp_budget_ms: float = 1
     max_alignment_budget_ms: float = 5
     max_gnss_age_ms: float = 200
 
@@ -51,6 +52,7 @@ class TelemetryConfig:
                                ("min_sync_samples", 2, 100000), ("max_clock_age_ms", 10, 5000),
                                ("max_sync_age_ms", 10, 5000), ("max_pose_bracket_ms", 1, 1000),
                                ("sdk_sync_budget_ms", .001, 100),
+                               ("px4_timestamp_budget_ms", .001, 100),
                                ("max_alignment_budget_ms", .1, 100), ("max_gnss_age_ms", 1, 5000)):
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:

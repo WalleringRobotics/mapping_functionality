@@ -8,7 +8,8 @@ Each session is a new directory; never resume or overwrite it.
 | `calibration.json` | Complete original EEPROM JSON payload |
 | `frames.jsonl` | One indexed row per saved image |
 | `imu.jsonl` | Independent raw accelerometer/gyroscope rows; may be empty |
-| `clock.jsonl` | Host monotonic, DepthAI steady-clock and UNIX wall-clock samples |
+| `clock.jsonl` | Bracketed SDK steady-to-Python monotonic observations plus receipt wall provenance |
+| `telemetry.jsonl` | Optional independent MAVROS messages and ROS-to-monotonic clock evidence |
 | `events.jsonl` | Gap and stop/failure records |
 | `images/rgb/000000000123.jpg` | RGB JPEG, or PNG in the lossless profile |
 | `images/left/000000000123.png` | Native mono image |
@@ -58,7 +59,7 @@ data. Sequence gaps are warnings to be assessed against survey overlap. Export
 requires explicit `--allow-gaps` for a selected stream with gaps. Integrity validation
 does not assert that imagery can reconstruct or meet an accuracy target.
 
-Completed manifests also seal all four journals with SHA-256, protecting timestamps
+Completed manifests seal the four camera journals and optional telemetry journal with SHA-256, protecting timestamps
 and settings against unnoticed transfer corruption.
 
 Validation checks images, hashes, counts, decode dimensions, pixel intrinsics,
@@ -96,3 +97,37 @@ and SHA-256. `report.json` summarizes successful preparation/execution and produ
 records undistortion, original-to-derived filenames, applied camera model, control CRS
 and operator-stated height reference. Engine `run.json` files retain command arrays,
 versions, completion/failure and products. None of these manifests certifies metric accuracy.
+
+## Optional MAVROS side contract v1
+
+`manifest.telemetry` identifies `adapter=mavros_ros2`, schema version, complete
+configuration, read-only parameter snapshot, frame/height conventions and final
+capture summary. Existing sessions without this field remain supported. This
+contract is independent of the camera dataset schema.
+
+Message rows contain `record_type=message`, `role`, absolute `topic`, `ros_type`,
+per-role `ordinal`, original `source_stamp_ros_ns`, `fields`, `cdr_base64`,
+`received_monotonic_ns`, `received_utc_ns` and `receipt_clock`. Nonfinite sensor
+values are explicit JSON markers such as `{"nonfinite":"nan"}`; the CDR keeps
+original bits. These are serialized **ROS** messages, not raw MAVLink packets.
+TIMESYNC rows additionally contain reproducible `sync_quality` evidence.
+
+Periodic `record_type=clock` observations map `target=ros_system` to
+`reference=python_monotonic`. SDK observations in `clock.jsonl` use
+`target=depthai_steady`. Each bridge includes integer `target_ns`, midpoint
+`reference_ns` and `bracket_ns` spanning the clock read. Receipt brackets are
+retained independently. Source/receipt clocks must never be interchanged.
+Legacy standalone clock snapshots remain readable; the new `sync` command
+requires bracketed bridges from a telemetry-enabled capture.
+
+MAVROS local body pose is ENU with FLU body axes; ROS IMU is FLU; OAK raw IMU
+is sensor-native. MAVROS global NavSatFix is vehicle position with WGS84
+ellipsoidal height. ROS nanosecond units do not imply nanosecond PX4 source
+precision: local position commonly uses millisecond boot timestamps.
+
+`sync` writes a fresh derived directory containing `associations.jsonl`,
+`body-poses.csv` and sealed `report.json` metadata. Per-image decisions retain
+original filenames, exposure clocks, body-pose interpolation evidence, optional
+nearest IMU/GNSS fields and estimated temporal budgets. Unassociated images are
+retained with reasons. There is no camera mounting transform or automatic pose
+fusion. See [integration and timing acceptance](mavlink-integration.md).

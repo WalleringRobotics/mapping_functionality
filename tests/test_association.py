@@ -18,7 +18,7 @@ def test_exposure_association_uses_device_mapping_not_receipt_and_does_not_apply
     assert row["exposure_ros_ns"] == 1700000001500000000
     assert row["estimated_px4_boot_ns"] == 1500000000
     assert row["body_pose"]["position_enu_m"] == [5, 2, 3]
-    assert row["estimated_alignment_budget_ms"] < 2
+    assert row["estimated_alignment_budget_ms"] < 3
     assert row["gnss"] is None
     assert "camera" in result["camera_extrinsics"]
     with pytest.raises(FileExistsError):

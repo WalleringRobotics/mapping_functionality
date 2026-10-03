@@ -170,7 +170,8 @@ def associate(root, output, stream="rgb", min_fraction=.9):
                     ros_exposure, ros_bracket, ros_method = inverse_ros.to_monotonic(mono, max_clock_age)
                     pose = pose_at(*mapped["pose"], mono, int(config.max_pose_bracket_ms * 1e6))
                     budget = (sdk_bracket + max(ros_bracket, pose["clock_budget_ns"])
-                              + sync["sync_quality"]["timesync_budget_ns"] + int(config.sdk_sync_budget_ms * 1e6))
+                              + sync["sync_quality"]["timesync_budget_ns"]
+                              + int((config.sdk_sync_budget_ms + config.px4_timestamp_budget_ms) * 1e6))
                     if budget > config.max_alignment_budget_ms * 1e6:
                         raise ValueError("Estimated clock-alignment budget exceeds configured limit")
                     imu = nearest_record(*mapped["imu_raw"], mono, int(config.max_pose_bracket_ms * 1e6))

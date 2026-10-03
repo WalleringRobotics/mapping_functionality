@@ -7,6 +7,10 @@ NVMe. The installed JetPack is unconfirmed: first record `uname -a`,
 `/etc/nv_tegra_release`, Python version and available memory. Do not upgrade a working
 JetPack deployment just for this recorder. USB DepthAI does not use Jetson CSI/Argus.
 
+For capture alongside the existing PX4 connector, use the optional
+[MAVROS integration guide](mavlink-integration.md), including the Humble-compatible
+venv, actual topic/node names, camera ownership and longer timing warmup.
+
 DepthAI 3.10.0, NumPy 1.26.4 and headless OpenCV 4.11.0.86 are pinned. Use a venv to
 avoid replacing JetPack packages. If pip cannot find the ARM64 wheel for the Python/
 glibc combination, resolve that combination rather than silently changing API versions.
@@ -105,4 +109,3 @@ After clean stop, copy the entire session (e.g. `rsync -a --partial`) and valida
 the destination. Keep two copies before freeing source storage. Save survey field
 notes plus repository commit, `pip freeze`, JetPack version, camera ID and mounting
 configuration alongside the private dataset.
-

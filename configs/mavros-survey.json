@@ -29,5 +29,6 @@
   "max_pose_bracket_ms": 50,
   "sdk_sync_budget_ms": 1,
   "max_alignment_budget_ms": 5,
-  "max_gnss_age_ms": 200
+  "max_gnss_age_ms": 200,
+  "px4_timestamp_budget_ms": 1
 }

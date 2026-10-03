@@ -18,7 +18,7 @@ full external-engine reconstruction on this development machine.
 Follow [Jetson setup](docs/jetson-setup.md) for USB permissions, NVMe and service deployment.
 
 ```bash
-git clone --branch feat/oak-photogrammetry-foundation \
+git clone --branch feat/mavlink-mapping-integration \
   https://github.com/WalleringRobotics/mapping_functionality.git
 cd mapping_functionality
 python3 -m venv .venv
@@ -42,6 +42,25 @@ per-stream timestamps, sequence numbers and checksums. Bounded buffering, disk
 reserve and stream/IMU watchdogs fail explicitly. Live `status.json` updates every
 five seconds; `wr-map status` flags stale recording heartbeats. Clean completion
 means accepted data was drained and sealed, not that a survey meets accuracy targets.
+
+For the existing **PX4/MAVROS companion connector**, follow the
+[integration and timing guide](docs/mavlink-integration.md). Keep MAVROS connected
+and release the OAK from the ROS camera driver before direct capture:
+
+```bash
+wr-map capture --config configs/oakd-mavros-survey.json \
+  --telemetry-config configs/mavros-survey.json \
+  --output /mnt/nvme/mapping/px4-bench-001 --duration 60
+wr-map sync /mnt/nvme/mapping/px4-bench-001 \
+  --output /mnt/nvme/alignment/px4-bench-001 --min-fraction 0.9
+```
+
+Configure the actual ROS node/topic names first. The supplied profile has a
+60-second warmup before the saved duration. Telemetry retains original headers
+and serialized ROS messages. Exposure-to-body-pose association uses measured
+clock bridges and qualified TIMESYNC evidence; it rejects stale timing and pose
+extrapolation. The derived body poses require calibrated camera mounting before
+use as camera priors. Physical timestamp accuracy still needs bench measurement.
 
 ## Mode 2 — offline processing
 
@@ -87,8 +106,8 @@ within a run: change a recipe or control file by starting a new run directory.
 
 The lower-level `export`, `reconstruct`, `dense` and `accuracy` commands remain
 available. Recorded IMU and stereo images are preserved but are not yet consumed
-as rig/VIO constraints. GNSS acquisition, automatic building scale alignment and
-live SLAM are outside these modes.
+as rig/VIO constraints. Optional MAVROS GNSS acquisition is implemented; automatic
+camera geolocation, building scale alignment and live SLAM remain future work.
 
 ## Development without hardware
 
@@ -104,11 +123,14 @@ ruff check src tests
 
 Synthetic IO images are not a physical 3D scene; engine execution rejects them.
 CI tests Python 3.10 and 3.12, including installed CLI preparation and resume.
+An additional Humble job exercises real ROS parameter services, DDS and CDR with
+simulated PX4 publishers. OAK/PX4 hardware remains outside automated coverage.
 
 ## Design and field guides
 
 - [Architecture and decisions](docs/architecture.md)
 - [Dataset and timing contract](docs/dataset-format.md)
+- [PX4/MAVROS integration, time synchronization and bench acceptance](docs/mavlink-integration.md)
 - [Jetson setup and commissioning](docs/jetson-setup.md)
 - [Capture geometry and field procedure](docs/acquisition.md)
 - [Postprocessing recipes, control formats and recovery](docs/postprocessing.md)

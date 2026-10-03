@@ -41,7 +41,8 @@ mapping when integrating multiple cameras and navigation sensors.
 3. Add optional camera-side MJPEG or raw chunk storage only if measured bandwidth/CPU
    requires it. Preserve exact frame/timestamp association and restart recovery.
 4. Add a controlled recovery command for interrupted sessions; never mutate originals.
-5. Add GNSS/flight-controller adapter with raw messages, clock mapping and event marks.
+5. Bench-qualify the implemented receive-only MAVROS adapter and clock mapping;
+   add calibrated camera geolocation and explicit survey event marks.
 6. Add calibration tooling (intrinsics, distortion, camera-camera, camera-IMU, timing),
    explicit metre/unit/frame conventions, and uncertainty evidence.
 7. Build a calibrated stereo/rig reconstruction adapter with validated exposure pairing.
@@ -57,4 +58,3 @@ Camera/lens/focus, mounting stiffness, shutter mode/resolution, FPS, compression
 USB cable/hub, storage device/filesystem, power supply, thermal setup, DepthAI, JetPack,
 and concurrent workloads can affect data quality or continuity. Retain versioned
 profiles and calibration identities; do not infer equivalence from a successful launch.
-

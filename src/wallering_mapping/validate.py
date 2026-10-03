@@ -129,8 +129,14 @@ def validate(root, decode=True):
             if file.is_file() and file.relative_to(root).as_posix() not in paths:
                 warnings.append(f"Unindexed image/tail file: {file.relative_to(root)}")
         # Audit all journals, including a torn final JSON line after a power loss.
-        for name in ("events", "clock"):
-            list(jsonl(root / f"{name}.jsonl"))
+        list(jsonl(root / "events.jsonl"))
+        from .timing import ClockTracker
+        tracker = ClockTracker(manifest.get("telemetry", {}).get("config", {}).get("clock_jump_ms", 5))
+        for row in jsonl(root / "clock.jsonl"):
+            if row.get("kind") == "clock_bridge":
+                if row["target"] != "depthai_steady":
+                    raise ValueError("Invalid SDK clock bridge domain")
+                tracker.observe(row)
         if "telemetry" in manifest:
             from .telemetry_audit import audit_telemetry
             telemetry = audit_telemetry(root, manifest)
