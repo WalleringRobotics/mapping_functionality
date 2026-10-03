@@ -28,6 +28,16 @@ def parser():
     simulate = commands.add_parser("simulate", help="Create an IO fixture without hardware")
     simulate.add_argument("--output", type=Path, required=True)
     simulate.add_argument("--frames", type=int, default=12)
+    validate = commands.add_parser("validate", help="Audit dataset integrity, gaps and timing")
+    validate.add_argument("session", type=Path)
+    validate.add_argument("--report", type=Path)
+    export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
+    export.add_argument("session", type=Path)
+    export.add_argument("--output", type=Path, required=True)
+    export.add_argument("--stream", choices=["rgb", "left", "right"], default="rgb")
+    export.add_argument("--interval", type=float, default=1.0)
+    export.add_argument("--min-sharpness", type=float, default=0.0)
+    export.add_argument("--allow-gaps", action="store_true")
     return result
 
 
@@ -45,6 +55,20 @@ def main(argv=None):
             if args.frames < 1:
                 raise ValueError("frames must be positive")
             result = simulate(args.output, args.frames)
+        elif args.command == "validate":
+            from .dataset import write_json
+            from .validate import validate
+            result = validate(args.session)
+            if args.report:
+                if args.report.resolve().is_relative_to(args.session.resolve()):
+                    raise ValueError("Write reports outside the immutable source session")
+                write_json(args.report, result)
+            print(json.dumps(result, indent=2))
+            return 0 if result["valid"] else 2
+        elif args.command == "export":
+            from .export import export
+            result = export(args.session, args.output, args.stream, args.interval,
+                            args.min_sharpness, args.allow_gaps)
         print(json.dumps(result, indent=2))
         return 0
     except (OSError, ValueError, RuntimeError, ImportError, TypeError) as error:
@@ -54,4 +78,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
