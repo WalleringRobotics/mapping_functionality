@@ -37,6 +37,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends python3-pip ros-humble-mavros-msgs ros-humble-geometry-msgs ros-humble-sensor-msgs ros-humble-rosidl-runtime-py
+          python3 -m pip install --upgrade pip setuptools wheel
           python3 -m pip install -e '.[dev]'
       - name: Exercise actual ROS parameter services, DDS subscriptions and CDR
         run: |
