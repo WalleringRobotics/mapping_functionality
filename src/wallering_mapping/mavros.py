@@ -134,10 +134,10 @@ class MavrosSubscriber:
         import rclpy
         from geometry_msgs.msg import PoseStamped
         from mavros_msgs.msg import State, TimesyncStatus
+        from rcl_interfaces.srv import GetParameters
         from rclpy.clock import Clock, ClockType
         from rclpy.context import Context
         from rclpy.executors import SingleThreadedExecutor
-        from rclpy.parameter_client import AsyncParameterClient
         from rclpy.qos import QoSProfile, ReliabilityPolicy
         from rclpy.serialization import serialize_message
         from rclpy.signals import SignalHandlerOptions
@@ -151,18 +151,21 @@ class MavrosSubscriber:
             raise ValueError("Hardware capture does not support ROS simulation time")
         self.executor = SingleThreadedExecutor(context=self.context)
         self.executor.add_node(self.node)
-        client = AsyncParameterClient(self.node, self.config.time_node)
+        client = self.node.create_client(GetParameters, self.config.time_node.rstrip("/") + "/get_parameters")
         timeout = self.config.parameter_timeout_seconds
-        if not client.wait_for_services(timeout_sec=timeout):
+        if not client.wait_for_service(timeout_sec=timeout):
             raise RuntimeError(f"MAVROS time node unavailable: {self.config.time_node}; inspect ros2 node list")
         names = ["timesync_mode", "convergence_window", "max_rtt_sample"]
-        future = client.get_parameters(names)
+        request = GetParameters.Request()
+        request.names = names
+        future = client.call_async(request)
         self.executor.spin_until_future_complete(future, timeout_sec=timeout)
         if not future.done() or future.result() is None:
             raise RuntimeError("MAVROS parameter read timed out")
         from rclpy.parameter import parameter_value_to_python
         parameters = {name: parameter_value_to_python(value)
                       for name, value in zip(names, future.result().values, strict=True)}
+        self.node.destroy_client(client)
         self.buffer = TelemetryBuffer(self.config, parameters)
         types = {"state": State, "imu_raw": Imu, "attitude": Imu, "pose": PoseStamped,
                  "gnss": NavSatFix, "timesync": TimesyncStatus, "time_reference": TimeReference}

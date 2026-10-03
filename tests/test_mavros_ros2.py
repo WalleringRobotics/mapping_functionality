@@ -46,7 +46,7 @@ def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
         sync.header.stamp = stamp.to_msg()
         sync.remote_timestamp_ns = remote
         sync.observed_offset_ns = sync.estimated_offset_ns = stamp.nanoseconds - remote
-        sync.round_trip_time_ms = 1
+        sync.round_trip_time_ms = 1.0
         state = State()
         state.header.stamp = stamp.to_msg()
         state.connected = True
@@ -55,7 +55,7 @@ def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
         imu.angular_velocity.x = .25
         pose = PoseStamped()
         pose.header.stamp, pose.header.frame_id = stamp.to_msg(), "map"
-        pose.pose.orientation.w = 1
+        pose.pose.orientation.w = 1.0
         for role, message in {"state": state, "imu_raw": imu, "pose": pose, "timesync": sync}.items():
             publishers[role].publish(message)
 
