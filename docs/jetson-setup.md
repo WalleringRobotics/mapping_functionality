@@ -14,7 +14,7 @@ glibc combination, resolve that combination rather than silently changing API ve
 ```bash
 sudo apt-get update
 sudo apt-get install python3-venv python3-dev libusb-1.0-0 usbutils git
-git clone https://github.com/WalleringRobotics/mapping_functionality.git
+git clone --branch feat/oak-photogrammetry-foundation https://github.com/WalleringRobotics/mapping_functionality.git
 cd mapping_functionality
 python3 -m venv .venv
 source .venv/bin/activate
@@ -34,6 +34,19 @@ Log out/in and reconnect the camera. Run `lsusb -t` and `wr-map inspect`; the re
 requires `SUPER`/`SUPER_PLUS`. The device re-enumerates at boot, so permissions must
 cover bootloader and runtime. Prefer a direct port and secured cable. Separately mount
 NVMe and grant the capture account write access. Avoid root-filesystem fallback.
+
+Before recording, run:
+
+```bash
+wr-map doctor --mode capture --config configs/oakd-survey.json \
+  --output-root /mnt/nvme/mapping --probe-device
+```
+
+Without `--probe-device`, doctor checks dependencies/storage but does not open the
+camera. During a recording use `wr-map status SESSION` from another terminal; a
+heartbeat older than 15 seconds is flagged stale. The heartbeat includes counts,
+writer backlog, free storage, memory availability and host load. A stale heartbeat
+is evidence to investigate, not a command to restart or overwrite a session.
 
 ## Commissioning
 

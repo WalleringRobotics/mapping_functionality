@@ -148,8 +148,7 @@ def process(session, output, config, execute=False, prepare_only=False, resume=F
                             mesh, _ = workflow.stage("mesh", lambda p: reconstruct.execute(
                                 reconstruct.mesh_plan(cloud, p)))
                             products.append(mesh / "mesh.ply")
-                previous_complete = workflow.state.get("completed_utc_ns")
-                workflow.state.update(status="complete" if execute or previous_complete else "prepared",
+                workflow.state.update(status="complete" if execute else "prepared",
                                       products=inventory(output, products) if products else workflow.state.get("products", []),
                                       quality=quality or workflow.state.get("quality"),
                                       accuracy_claim="Not verified; assess independent checkpoints",

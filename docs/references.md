@@ -30,3 +30,15 @@ reprocessing options; **moderate** in this hardware adapter until target testing
 **unknown** for sustained Nano throughput and **unestablished** for centimetre-level
 mapping accuracy. Passing software tests does not change the last two statements.
 
+
+## Pinned terrain implementation references
+
+- [ODM v3.6.2 camera override conversion](https://github.com/OpenDroneMap/ODM/blob/v3.6.2/opendm/camera.py): supported camera fields and exact camera-ID handling.
+- [ODM v3.6.2 image identity](https://github.com/OpenDroneMap/ODM/blob/v3.6.2/opendm/photo.py): no-EXIF defaults and `camera_id()`.
+- [ODM v3.6.2 ingestion](https://github.com/OpenDroneMap/ODM/blob/v3.6.2/stages/dataset.py): image/mask naming and ingestion metadata.
+- [ODM v3.6.2 OpenSfM stage](https://github.com/OpenDroneMap/ODM/blob/v3.6.2/opendm/osfm.py): calibration overrides and fixed-camera configuration.
+- [OpenSfM geometry conventions](https://opensfm.org/docs/geometry.html): normalized image coordinates and camera models.
+
+These contracts were inspected against the pinned source. Full Docker reconstruction,
+real sensor throughput and independent metric accuracy were not measured in the
+hardware-free development environment; the commissioning procedures remain required.

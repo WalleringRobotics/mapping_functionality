@@ -1,168 +1,211 @@
-# Postprocessing design and operating procedure
+# Offline processing: building and terrain recipes
 
-## Product paths
+## Workstation setup
 
-| Goal | Initial workflow | Result | Main constraint |
-|---|---|---|---|
-| Building/object geometry | Export RGB → COLMAP SfM → MVS | Camera poses, sparse model, dense coloured PLY | Scale/CRS absent unless constrained separately |
-| Rolling-shutter comparison | Separate left-mono export → same SfM process | Independent geometry comparison | Lower texture resolution, no RGB colour |
-| Terrain/orthomosaic | Export RGB → ODM/WebODM with GCPs/geolocation | Point cloud, mesh, orthomosaic, DSM; classified DTM if justified | Coordinate/datum and ground-visibility checks |
-| Later high-accuracy rig | Triggered cameras + calibrated rig + time/GNSS constraints | Metric, georeferenced multi-sensor mapping | Future implementation; not enabled by recording two cameras alone |
-
-The implementation automates the first two paths up to dense point cloud. ODM,
-georeferencing, textured mesh generation and rig/VIO integration are designed here
-but remain external/manual steps. Recorded IMU and stereo images are preserved;
-standard single-camera COLMAP does not consume them as constraints.
-
-## 1. Ingest and inspect
-
-Copy the entire session and run `wr-map validate`. Do not process an incomplete
-session as if it were intact. Keep originals on a second medium. Review sequence
-gaps, frame periods, timing offsets, illumination, blur, exposure and focus. A
-nearest timestamp match does not prove frame synchronization.
-
-Record the survey ID, capture commit/config, device calibration hash, source manifest
-hash, targets/CRS, software builds, and output parameters. The tools store many of
-these automatically; field measurements and deployment versions remain operator inputs.
-
-## 2. Select keyframes
+Use Linux and Python 3.10–3.12. Capture dependencies and processing dependencies are
+separate; the Orin need not install reconstruction engines.
 
 ```bash
-wr-map export /data/sessions/site-001 --output /data/projects/site-001 \
-  --stream rgb --interval 0.5
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[processing,terrain]'
 ```
 
-Interval selection uses sensor time and keeps original pixels. Sharpness is the
-variance of the full-resolution grayscale Laplacian. It is scene/resolution dependent,
-so `--min-sharpness` defaults to 0: inspect scores before choosing a threshold.
-Textureless walls can score low even in sharp images; grass can score high despite
-poor stable correspondences. Dark/bright fractions are diagnostics, not universal
-rejection thresholds. Check rejected-image distribution so quality filtering does
-not create coverage holes. Dynamic objects and water masks are an external step
-for the initial workflow.
+For buildings, install a CUDA-enabled **COLMAP 3.12.6** workstation build using the
+[official release/source instructions](https://github.com/colmap/colmap/releases/tag/3.12.6).
+Check `colmap -h` and `colmap feature_extractor -h`. The runner gates CLI execution
+to 3.12.x. The pinned `pycolmap==3.12.6` wheel reads models and reports poses; it does
+not install the `colmap` executable. `cpu: true` changes sparse SIFT extraction and
+matching only. Dense PatchMatch still needs CUDA; for CPU-only sparse processing,
+set `dense: false` and `mesh: false` in a copied recipe.
 
-The exporter initializes COLMAP intrinsics from actual frame metadata. Perspective
-coefficients are mapped to `FULL_OPENCV`; fisheye to `OPENCV_FISHEYE`. It refuses
-unsupported lens terms or changing focus/geometry. The runner initially fixes lens
-distortion/principal point and allows focal length refinement. Treat this as a
-controlled baseline: compare against a separately calibrated lens and selected
-bundle-adjustment refinements on independent checkpoints.
-
-## 3. Sparse reconstruction
-
-Install a CUDA-enabled **COLMAP 3.12.6** workstation build using its official
-[release/source instructions](https://github.com/colmap/colmap/releases/tag/3.12.6).
-Verify `colmap -h` and `colmap feature_extractor -h`. The repository deliberately
-gates execution to the 3.12 family; a future major-version migration needs CLI and
-dataset validation. A system package might be older or CPU-only, and pip's `pycolmap`
-does not by itself provide the `colmap` CLI used here.
+For terrain, install Docker, give the operator access to its daemon, and explicitly
+pull `opendronemap/odm:3.6.2`. The runner resolves the locally installed tag to its
+immutable image ID, verifies the engine's version, and records image ID/digests.
+A recipe can pin `opendronemap/odm@sha256:<64 hexadecimal characters>` instead.
+Mutable `latest` tags are rejected. Containers use the operator's UID/GID, a private
+run directory and no network. Rootless Docker UID mappings and SELinux mounts may
+need local deployment adjustments. Docker access is not configured by this package.
 
 ```bash
-wr-map reconstruct /data/projects/site-001 --output /data/runs/site-001
-wr-map reconstruct /data/projects/site-001 --output /data/runs/site-001 --execute
+wr-map doctor --mode process --backend building --output-root /data/runs
+wr-map doctor --mode process --backend terrain --output-root /data/runs
+docker pull opendronemap/odm:3.6.2
 ```
 
-The stages are feature extraction, matching and incremental mapping [R7](references.md).
-The plan contains explicit camera parameters and argument arrays; execution writes
-per-stage logs and `run.json`. Existing output directories are refused. Failed
-outputs are kept for diagnosis; retry in a new directory rather than silently
-reusing a partially changed database.
+`doctor` checks dependencies and writable/free storage; it does not benchmark GPU
+memory, verify the Docker daemon/image, or qualify a survey. Version/container checks
+also run when executing the relevant engine. Allow ample disk space: immutable
+originals, exports, derived PNGs/masks, engine inputs, databases, depth maps and
+failed attempts are retained. No automatic pruning occurs.
 
-Exhaustive matching is the default for small surveys, including building loop
-closure. `--matcher sequential` is cheaper for long ordered sequences but does not
-guarantee the start/end or cross-track links. For larger missions, add image retrieval,
-spatially guided pairs or hierarchical SfM; do not infer full connectivity from a
-successful process exit.
+## Ingest and select photographs
 
-Inspect every `sparse/N` component with COLMAP GUI or `model_analyzer --path ...`.
-Report registered/selected image fraction, disconnected components, point tracks,
-reprojection-error distribution, camera path and obvious geometry failures. A
-suggested first-trial target is >95% registered useful images in one component,
-but scene coverage and withheld checks take precedence over this heuristic.
+Transfer the entire stopped session, including calibration and journals; retain a
+second copy. `wr-map validate SESSION` audits all recorded streams. Incomplete or
+corrupted sessions are rejected. `process` repeats validation before planning or
+running. It exports one stream at a time using the recipe's `stream`,
+`interval_seconds`, `min_sharpness` and `allow_gaps` fields.
 
-## 4. Dense geometry
+Selection uses device time. `selection.jsonl` records each decision, Laplacian
+sharpness, dark and bright fractions. Sharpness defaults to zero because a universal
+threshold would reject low-texture walls or favor unstable foliage. Inspect the
+scores and coverage before raising it. Selected GCP photographs must survive the
+selection interval and quality filter. Decrease the interval to retain them.
+
+Images are initially copied byte-for-byte. Export preserves actual pixel calibration
+and rejects changing dimensions/focus or unsupported lens terms. Perspective models
+map to COLMAP `FULL_OPENCV`; fisheye to `OPENCV_FISHEYE`. RGB and mono are separate
+reconstructions; recording stereo does not automatically supply metric scale.
+
+## Run and resume
 
 ```bash
-wr-map dense /data/projects/site-001 --model /data/runs/site-001/sparse/0 \
-  --output /data/runs/site-001-dense --max-image-size 2000 --execute
+# Plan only; validates the source but creates no output files.
+wr-map process /data/sessions/building-001 --config configs/process-building.json \
+  --output /data/runs/building-001
+
+# Optional input preparation before a long engine run.
+wr-map process /data/sessions/building-001 --config configs/process-building.json \
+  --output /data/runs/building-001 --prepare-only
+
+# Continue the prepared run.
+wr-map process /data/sessions/building-001 --config configs/process-building.json \
+  --output /data/runs/building-001 --execute --resume
 ```
 
-Explicit model selection prevents silently processing only an arbitrary fragment.
-Undistortion, PatchMatch and geometric fusion produce `dense/fused.ply`. This baseline
-requires CUDA for PatchMatch. Start at 2000 pixels on the long edge; increase only
-after checking VRAM/runtime and useful detail. An RTX 3060-class 12 GB workstation
-is a reasonable trial platform, but image count, size and scene complexity determine
-resources. No runtime estimate has been benchmarked here.
+A new run must use an unused directory outside its source. Use `--resume` explicitly
+for an existing run. Source manifest, recipe, control-file hashes and height reference
+must match. Completed stages are hash-checked before reuse; a modified artifact is
+an error. Failed/interrupted stages retry in a fresh numbered directory, preserving
+all earlier evidence. Concurrent processing of the same run is locked out. A killed
+or powered-off worker may leave a `running` attempt; resume marks it interrupted and
+creates a new attempt. Check that any surviving engine process has stopped first.
 
-Optional meshing uses COLMAP's Poisson/Delaunay tools or a separately versioned
-OpenMVS/MeshLab workflow. Meshing can invent surfaces over gaps; retain the measured
-point cloud, masks and confidence information. Texture/mesh export is not currently
-wrapped by `wr-map`.
+SIGINT/SIGTERM cancel owned subprocess groups. ODM cleanup targets only the unique
+container created by that attempt. Interrupted source capture recovery is different:
+failed capture sessions remain ineligible for export, and automated salvage is future work.
 
-## 5. Scale, georeferencing and coordinate conventions
+`workflow.json` contains stage history, commands/results, checksums and provenance.
+`report.json` is written after successful preparation/execution and lists product
+paths and quality. After a failed retry, consult `workflow.json` as the current
+status; an older report can describe an earlier successful state. Engine logs live
+inside each attempt directory. Capture and workflow paths can contain spaces.
 
-Single-camera SfM has an arbitrary similarity transform: scale, rotation and
-translation are unobservable from pixels alone. The OAK stereo baseline is **not**
-used by this runner, so recording left/right does not automatically provide metric
-scale. For the initial object trial, fit scale/alignment with measured control
-targets/scale bars, then evaluate different withheld targets.
+Changing configuration, including choosing a different sparse `model_index`, requires
+a new run. For manual reuse of an inspected existing model, use the lower-level
+`dense` command. No existing model/database is silently overwritten.
 
-For terrain products, use spatially distributed surveyed GCPs, and preserve reference
-coordinate system, axis order and vertical datum. Do not mix ellipsoidal heights with
-orthometric heights without a documented transformation. Ordinary GNSS priors can
-help initialization but do not establish centimetre accuracy. RTK/PPK requires event
-timing, antenna-to-camera lever arm, attitude and uncertainty modelling.
+## Building/object recipe
 
-For future direct georeferencing, record raw GNSS and event marks plus device↔GNSS
-clock calibration. At time `t`, camera centre is antenna/body position plus the
-rotated lever arm. Delay, rotation and lever-arm uncertainty can dominate the RTK
-receiver's quoted position precision. No such telemetry adapter exists in v0.1.
+`configs/process-building.json` runs export, feature extraction, exhaustive matching,
+incremental mapping, sparse quality assessment, dense fusion, and Poisson meshing.
+COLMAP fixes lens distortion/principal point and may refine focal length. Compare
+factory calibration against measured calibration before making accuracy claims.
 
-## 6. ODM / WebODM terrain path
+Default quality gates require one sparse component, at least 90% registered selected
+images, and 100 sparse points. These are engineering starting gates, not survey
+standards. The report includes unregistered images, median/p95 reprojection errors
+and median track length. Multiple components require explicit `model_index`; do not
+silently accept an arbitrary fragment. Large surveys may need a different matching
+strategy; sequential matching alone does not guarantee loop/cross-track closure.
 
-Use the exported `images` directory as an ODM dataset. It contains no invented GPS
-EXIF, camera identity or focal-length tags. `project.json` is **not an ODM calibration
-file**. Initially, use WebODM to define camera/calibration overrides where supported
-and annotate GCP observations; or build/verify an explicit ODM/OpenSfM camera override.
-Do not assume ODM auto-detects a trustworthy lens model from these OAK image files.
+Outputs include COLMAP binary model files, `quality.json`, `camera-poses.csv`,
+`dense/fused.ply`, and optional `mesh.ply`. Pose CSV contains camera centers in COLMAP
+world coordinates and **camera-from-world** quaternion `w,x,y,z` plus translation.
+World units/axes are arbitrary until independently aligned. The Poisson mesh is
+untextured and can fill gaps; retain the measured cloud and inspect invented surfaces.
 
-Keep the export immutable: copy its selected images into a separate ODM working
-directory, e.g. `/data/odm/site-001/images`. Add `gcp_list.txt` in the dataset root
-using [ODM's exact format](https://docs.opendronemap.org/gcp/): projection header,
-ground XYZ, observed image pixel XY, image filename and point label. Keep checkpoints
-out of this fitted-control file [R8]. Use local projected metres where appropriate.
+Single-camera SfM cannot determine scale, rotation or translation from pixels alone.
+Apply measured control/scale alignment separately before evaluating metric errors.
+Neither IMU nor the OAK stereo baseline is used as a metric constraint in this version.
 
-For command-line ODM, choose a tested release image and pin its immutable digest.
-The following is a **template**; replace the digest with the one actually installed:
+## Terrain recipe and control inputs
+
+`configs/process-terrain.json` requires **GCP observations or camera geolocation**,
+plus `--vertical-datum`. Inputs use original selected image names and original image
+pixel coordinates. `project.json` and `frames.jsonl` provide the name mapping.
+Annotate points externally in those original images; an annotation GUI is not bundled.
+
+Native GCP format (illustrative values, not real survey observations):
+
+```text
+EPSG:32632
+500000 6000000 100 320 240 rgb_000000000.jpg target-01
+```
+
+The first non-comment line declares an explicit projected/geographic CRS. Each row
+is `X Y Z pixel_x pixel_y image_name label`; names/labels must not contain whitespace.
+This recipe requires at least **five noncollinear ground points**, each observed in
+**three selected images**. Repeated point labels must have identical ground XYZ.
+Distribute targets over the footprint and heights. Keep withheld checkpoints out
+of this file. Input syntax/layout checks do not establish reference accuracy.
+
+Alternatively use an ODM geolocation file:
+
+```text
+EPSG:32632
+rgb_000000000.jpg 500000 6000000 110
+```
+
+Rows contain `image X Y Z`, optionally followed by
+`yaw pitch roll horizontal_sigma vertical_sigma` (all five optional values together).
+Use ODM's axis/angle conventions [R9](references.md), positive stated uncertainties,
+and actual calibrated camera positions at exposure time. At least three noncollinear
+XY camera positions are required. GNSS receipt time is not camera exposure time.
+The current recorder does not acquire GNSS or generate this file.
 
 ```bash
-docker run --rm -v /data/odm:/datasets \
-  opendronemap/odm@sha256:REPLACE_WITH_VERIFIED_DIGEST \
-  --project-path /datasets --dsm --orthophoto-resolution 1 site-001
+wr-map process /data/sessions/terrain-001 --config configs/process-terrain.json \
+  --output /data/runs/terrain-001 --gcp /data/control/terrain-001.txt \
+  --vertical-datum EGM2008 --prepare-only
+wr-map process /data/sessions/terrain-001 --config configs/process-terrain.json \
+  --output /data/runs/terrain-001 --gcp /data/control/terrain-001.txt \
+  --vertical-datum EGM2008 --execute --resume
 ```
 
-ODM output resolution in this option is cm/pixel; requesting 1 cm pixels does not
-mean 1 cm absolute accuracy. Add `--dtm` only with defensible ground classification
-and visible ground. Preserve canopy/no-data regions rather than promising bare-earth
-terrain under dense vegetation. `--geo` can accept image positions [R9], but derive
-them from calibrated exposure times and real telemetry, not host receipt timestamps.
+Use `--geo FILE` instead of or alongside `--gcp FILE`. Supply consistent horizontal
+and vertical references. The height label is recorded, **not transformed**: do not
+mix ellipsoidal and orthometric heights. Confirm actual output GeoTIFF CRS, bounds,
+height convention and nodata in GIS before delivery; the current gate checks product
+existence/hashes and registration, not independent raster/geodetic correctness.
 
-ODM has rolling-shutter correction/readout options [R10]. Do not guess the OAK
-readout time or substitute exposure duration: measure it for the sensor mode or obtain
-vendor evidence before enabling a numeric override. This remains an experiment,
-not a guarantee that dynamic distortion can always be corrected.
+### Calibration handling
 
-Deliverable targets: GeoTIFF orthomosaic and DSM, optional justified DTM, georeferenced
-point cloud, mesh/texture when required, explicit horizontal/vertical CRS, and a quality
-report. Inspect seams, leaning structures, moving foliage, water and extrapolated areas.
+OAK rational/fisheye coefficients cannot all be represented by ODM's Brown model.
+Preparation therefore undistorts a **working copy** with OpenCV, keeping the original
+intrinsic matrix and dimensions. It writes lossless derived PNGs, usable-area masks,
+an exact ODM/OpenSfM camera override and transformed GCP pixel observations. Source
+images remain unchanged. GCPs outside usable undistorted pixels are rejected.
 
-## 7. Accuracy report
+OpenSfM normalized intrinsics use `max(width,height)` and center
+`((width-1)/2,(height-1)/2)`. Derived images have no EXIF; the pinned ODM camera ID
+includes its documented-in-source placeholder focal ratio. The override supplies
+actual calibration. The runner first ingests images and verifies that ID, then
+checks applied camera parameters and sparse connectivity before dense products.
+It fixes camera parameters and uses visual FLANN matching, without fabricated GPS.
 
-Define the requirement first: e.g. local dimensional error, horizontal map RMSE,
-vertical RMSE, 3D p95, or absolute position. These are different from GSD and reprojection
-error. A proposed 1 cm objective must specify which metric, scene/range and valid area.
+This conversion is pinned to ODM 3.6.2 source behavior. Upgrading ODM needs renewed
+camera-ID, parameter and GCP checks. Calibration unit tests cover both rational and
+fisheye rays; real imagery must still establish reconstruction quality.
 
-Create a CSV after the model has been aligned using **separate control data**:
+### Products and acceptance
+
+The runner requires nonempty orthomosaic GeoTIFF, DSM GeoTIFF and georeferenced LAZ;
+mesh is enabled by default and includes available texture/material files. `dtm: true`
+adds DTM generation/verification. Request it only with defensible ground classification
+and visible ground. Dense vegetation does not yield measured bare earth by configuration.
+
+`orthophoto_cm` and `dem_cm` specify output pixel spacing in centimetres. They do not
+assert that imagery supports that detail or that absolute accuracy matches it. Inspect
+seams, duplicate structures, moving foliage, water, edge extrapolation and nodata.
+Do not guess rolling-shutter readout from exposure duration; no correction is enabled
+without characterized sensor timing.
+
+## Independent accuracy assessment
+
+After external building alignment or terrain georeferencing, measure withheld points
+in the output and prepare a CSV in a common **metre-based frame**:
 
 ```csv
 id,role,reference_x_m,reference_y_m,reference_z_m,model_x_m,model_y_m,model_z_m
@@ -171,25 +214,13 @@ check-02,check,10,0,0,10.004,0.003,0.004
 check-03,check,0,10,1,0.003,10.002,1.004
 ```
 
-These rows are illustrative only. Use actual surveyed coordinates spanning the
-footprint and heights, with enough independent points to assess spatial bias.
-
 ```bash
-wr-map accuracy /data/quality/site-001-checkpoints.csv
+wr-map accuracy /data/quality/checkpoints.csv
 ```
 
-The tool reports mean XYZ bias, per-axis RMSE, horizontal/3D RMSE, 3D p95 and max.
-It does not align the two sets or verify the truth/independence of supplied coordinates.
-Do not use withheld checkpoints to tune the same model repeatedly and then call
-them independent. Report reference-measurement uncertainty, point count, coverage,
-outliers/exclusions and repeat-survey consistency.
-
-## Acceptance and next iteration
-
-First demonstrate an end-to-end static object/building result, then repeat it.
-Investigate accuracy loss with controlled changes: slower motion, shorter exposure,
-fixed calibrated focus, mono comparison, larger convergent baseline, improved control.
-Upgrade hardware after identifying the limiting mechanism. The current confidence
-is high in the workflow structure, moderate in expected OAK/Jetson integration until
-bench tests, and unestablished for any metric accuracy target.
-
+The tool reports XYZ bias, per-axis/horizontal/3D RMSE, 3D p95 and maximum. It does
+not fit alignment or verify the supplied observations' independence. State reference
+uncertainty, coverage, outliers/exclusions and repeat-survey behavior. A successful
+process exit, low reprojection error or fine output grid does not establish centimetre
+accuracy. Hardware capture and a full real-survey reconstruction remain commissioning
+gates for both product recipes.

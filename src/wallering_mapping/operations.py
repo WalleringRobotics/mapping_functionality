@@ -12,7 +12,7 @@ from pathlib import Path
 
 def provenance():
     versions = {}
-    for name in ("wallering-mapping", "depthai", "numpy", "opencv-python-headless"):
+    for name in ("wallering-mapping", "depthai", "numpy", "opencv-python-headless", "pycolmap", "pyproj"):
         try:
             versions[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -91,6 +91,12 @@ def doctor(mode, output_root, config=None, probe=False, device_id=None, backend=
     else:
         engine = "colmap" if backend == "building" else "docker"
         check(engine, shutil.which(engine) is not None, shutil.which(engine))
+        if backend == "building":
+            try:
+                from .model import pycolmap
+                check("pycolmap", True, pycolmap().__version__)
+            except (ImportError, RuntimeError) as error:
+                check("pycolmap", False, str(error))
         if backend == "terrain":
             try:
                 import pyproj

@@ -173,6 +173,16 @@ def docker_command(image, output, name, config, end_with=None):
     return command + ["site"]
 
 
+def verify_camera(actual, expected):
+    if actual.get("projection_type") != "brown":
+        raise ValueError("ODM changed the calibrated camera projection")
+    for key, value in expected.items():
+        if isinstance(value, (float, int)):
+            observed = actual.get(key, float("inf"))
+            if not isinstance(observed, (int, float)) or not np.isfinite(observed) or abs(observed - value) > 1e-9:
+                raise ValueError(f"ODM calibration mismatch: {key}")
+
+
 def execute(prepared, output, config):
     metadata = json.loads((prepared / "preparation.json").read_text())
     if metadata["status"] != "ready" or metadata["source_type"] == "synthetic":
@@ -205,13 +215,16 @@ def execute(prepared, output, config):
                 if metadata["camera_id"] not in cameras:
                     raise ValueError("ODM did not apply the calibrated camera override")
                 actual = cameras[metadata["camera_id"]]
-                for key, value in metadata["camera"].items():
-                    if isinstance(value, (float, int)) and abs(actual.get(key, float("inf")) - value) > 1e-9:
-                        raise ValueError(f"ODM calibration mismatch: {key}")
+                verify_camera(actual, metadata["camera"])
                 reconstructions = json.loads((output / "site/opensfm/reconstruction.json").read_text())
                 if len(reconstructions) != 1:
                     raise ValueError("ODM produced multiple/empty sparse components; inspect before dense mapping")
                 reconstruction = reconstructions[0]
+                if set(reconstruction["cameras"]) != {metadata["camera_id"]}:
+                    raise ValueError("ODM reconstruction has unexpected cameras")
+                verify_camera(reconstruction["cameras"][metadata["camera_id"]], metadata["camera"])
+                if not set(reconstruction["shots"]) <= set(metadata["image_mapping"].values()):
+                    raise ValueError("ODM reconstruction references unexpected images")
                 fraction = len(reconstruction["shots"]) / metadata["images"]
                 if fraction < config.min_registered_fraction or len(reconstruction["points"]) < config.min_sparse_points:
                     raise ValueError("ODM sparse reconstruction failed registration/point-count quality gates")
@@ -224,6 +237,12 @@ def execute(prepared, output, config):
             required.append(output / "site/odm_dem/dtm.tif")
         if config.mesh:
             required.append(output / "site/odm_texturing/odm_textured_model_geo.obj")
+            textures = [p for p in (output / "site/odm_texturing").iterdir()
+                        if p.suffix.lower() in {".mtl", ".png", ".jpg", ".jpeg"}]
+            if not any(p.suffix.lower() == ".mtl" for p in textures) or not any(
+                    p.suffix.lower() in {".png", ".jpg", ".jpeg"} for p in textures):
+                raise ValueError("ODM textured mesh is missing materials/textures")
+            required += textures
         state["products"] = inventory(output, required)
         state.update(status="complete", input_reference=metadata["reference"],
                      vertical_datum=metadata["vertical_datum"],

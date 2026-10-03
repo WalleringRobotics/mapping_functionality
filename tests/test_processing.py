@@ -98,7 +98,8 @@ def test_real_binary_model_quality_and_poses(session, tmp_path):
         assess_model(project, tmp_path / "sparse", ProcessConfig(min_sparse_points=101),
                      tmp_path / "rejected")
     assert not json.loads((tmp_path / "rejected/quality.json").read_text())["passed"]
-    reconstruction.write(str((tmp_path / "sparse/1").mkdir() or tmp_path / "sparse/1"))
+    (tmp_path / "sparse/1").mkdir()
+    reconstruction.write(str(tmp_path / "sparse/1"))
     with pytest.raises(ValueError, match="Multiple sparse"):
         assess_model(project, tmp_path / "sparse", ProcessConfig(), tmp_path / "ambiguous")
 

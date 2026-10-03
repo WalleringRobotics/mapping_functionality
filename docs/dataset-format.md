@@ -81,3 +81,18 @@ Lens conversion supports perspective→`FULL_OPENCV` and four-coefficient
 fisheye→`OPENCV_FISHEYE`. Nonzero thin-prism/tilt terms are rejected, not discarded.
 Export requires one resolution, focus and calibration group. New camera adapters
 must honor the clock, calibration and integrity contract or version the schema.
+
+## Operational and processing manifests
+
+Capture `status.json` is an atomic, mutable heartbeat separate from sealed sensor
+journals. It updates every five seconds and at shutdown. It is useful for monitoring,
+not a replacement for final manifest/journal validation. The manifest records software
+versions, repository revision/dirty state, architecture, kernel and Jetson release.
+
+Offline `workflow.json` records immutable source/config/control fingerprints and
+numbered stage attempts. Each completed attempt seals nonempty artifacts with length
+and SHA-256. `report.json` summarizes successful preparation/execution and product paths;
+`workflow.json` is authoritative after failures. `stages/terrain-input-NNN/preparation.json`
+records undistortion, original-to-derived filenames, applied camera model, control CRS
+and operator-stated height reference. Engine `run.json` files retain command arrays,
+versions, completion/failure and products. None of these manifests certifies metric accuracy.

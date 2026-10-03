@@ -110,3 +110,59 @@ def test_odm_failed_run_retains_evidence_and_cleans_owned_container(tmp_path, mo
     assert state["status"] == "failed"
     assert cleaned[0][:3] == ["docker", "rm", "-f"]
     assert cleaned[0][3].startswith("wr-mapping-")
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_odm_engine_contract_and_final_camera_drift_gate(tmp_path, monkeypatch, drift):
+    """Controlled engine output contract; this does not run real ODM reconstruction."""
+    import wallering_mapping.odm as odm
+    source, project, prepared, output = (tmp_path / name for name in ("source", "project", "prepared", "run"))
+    simulate(source, 6)
+    metadata = export(source, project)
+    names = [item["name"] for item in metadata["images"]]
+    controls = control_file(tmp_path / "control.txt", names)
+    metadata = prepare(project, prepared, gcp_path=controls, vertical_datum="EGM2008")
+    metadata["source_type"] = "test-orchestration"
+    (prepared / "preparation.json").write_text(json.dumps(metadata))
+    monkeypatch.setattr(odm, "resolve_image", lambda _: {"id": "sha256:fixture"})
+    monkeypatch.setattr(odm.subprocess, "run", lambda *a, **kw: None)
+    calls = []
+
+    def engine(command, log):
+        calls.append(command)
+        log.write_text("Controlled engine fixture, not a reconstruction")
+        if len(calls) == 1:
+            photos = [{"filename": name, "camera_make": "", "camera_model": "", "width": 640,
+                       "height": 480, "camera_projection": "brown", "focal_ratio": .85}
+                      for name in metadata["image_mapping"].values()]
+            (output / "site/images.json").write_text(json.dumps(photos))
+        elif len(calls) == 2:
+            root = output / "site/opensfm"
+            root.mkdir()
+            cameras = {metadata["camera_id"]: metadata["camera"]}
+            (root / "camera_models.json").write_text(json.dumps(cameras))
+            fitted = json.loads(json.dumps(cameras))
+            if drift:
+                fitted[metadata["camera_id"]]["focal_x"] += .01
+            reconstruction = [{"cameras": fitted,
+                               "shots": {name: {} for name in metadata["image_mapping"].values()},
+                               "points": {str(i): {} for i in range(100)}}]
+            (root / "reconstruction.json").write_text(json.dumps(reconstruction))
+        else:
+            for name in ("odm_orthophoto/odm_orthophoto.tif", "odm_dem/dsm.tif",
+                         "odm_georeferencing/odm_georeferenced_model.laz",
+                         "odm_texturing/odm_textured_model_geo.obj",
+                         "odm_texturing/odm_textured_model_geo.mtl", "odm_texturing/texture.jpg"):
+                path = output / "site" / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_text("fixture; no raster or geometry semantics")
+
+    monkeypatch.setattr(odm, "run_logged", engine)
+    if drift:
+        with pytest.raises(ValueError, match="calibration mismatch"):
+            odm.execute(prepared, output, ProcessConfig(product="terrain"))
+        assert len(calls) == 2  # Stop before dense work with incorrect calibration.
+    else:
+        result = odm.execute(prepared, output, ProcessConfig(product="terrain"))
+        assert result["status"] == "complete" and len(result["products"]) == 6
+        assert len(calls) == 3

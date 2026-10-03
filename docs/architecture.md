@@ -44,6 +44,11 @@ flowchart TD
 `export.py` selects one camera and converts supported lens models. `reconstruct.py`
 builds command argument arrays and records external process results. `accuracy.py`
 evaluates independent checkpoints without fitting an alignment to them.
+`process.py` owns the resumable workflow and stage manifests. `model.py` reads real
+COLMAP models and exports poses/quality. `odm.py` prepares calibrated working images,
+transforms GCP pixels, checks the pinned engine's camera override, and runs terrain
+products. `control.py` validates supplied controls/geolocation. `operations.py`
+provides preflight, live capture status and software/machine provenance.
 
 The current adapter assumes CAM_A=RGB, CAM_B=left, CAM_C=right. Missing sockets fail
 preflight. Other wiring requires an adapter change. USB 2 and PoE-only transport

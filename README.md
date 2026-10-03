@@ -1,99 +1,119 @@
 # Wallering Robotics — photogrammetric mapping
 
-**Capture on Jetson Orin Nano + Luxonis OAK-D. Reconstruct offline on a workstation.**
+**Two operating modes: record on Jetson Orin Nano + Luxonis OAK-D, then process offline on a workstation.**
 
-A capture-first foundation for building surveys and terrain mapping, with a portable
-dataset contract for later global-shutter/GigE upgrades.
+The processing mode supports **building/object geometry** with COLMAP and
+**terrain maps** with OpenDroneMap. Original photographs, calibration, inertial
+measurements and timing evidence remain available for future camera and algorithm upgrades.
 
-**Status:** implemented and tested without camera hardware. The OAK adapter targets
-DepthAI **3.10.0**. Jetson throughput, the actual OAK model and reconstruction accuracy
-still require [commissioning](docs/jetson-setup.md#commissioning). Synthetic tests
-exercise IO, not SfM geometry. No centimetre-accuracy claim is made.
+**Status:** software implemented and tested without attached camera hardware.
+DepthAI 3.10.0, COLMAP 3.12.x and ODM 3.6.2 are the supported baselines. Hardware
+throughput and real-survey accuracy require [commissioning](docs/jetson-setup.md#commissioning).
+Automated tests exercise storage, geometry conversion, real COLMAP model IO and
+controlled engine orchestration; they do not establish field accuracy or a successful
+full external-engine reconstruction on this development machine.
 
-## Implemented scope
+## Mode 1 — onboard capture
 
-| Stage | Implementation |
-|---|---|
-| Inspect | Device ID, sensors, focus capability, IMU and USB speed |
-| Record | Full-FOV RGB + left/right images, optional raw IMU, calibration and timestamps |
-| Storage | Bounded writer, hashes, atomic image publication, disk reserve, failure status |
-| Validate | Integrity, image decoding, counts, sequences, time continuity and camera offsets |
-| Export | Original image selection, quality metrics, calibrated single-camera COLMAP project |
-| Reconstruct | Reviewable/executable COLMAP 3.12 sparse and dense pipelines, logs and provenance |
-| Accuracy | Independent checkpoint bias, RMSE, p95 and maximum error |
-| Terrain products | Documented ODM workflow; automated ODM integration is future work |
-
-ROS2, online SLAM, GNSS/flight-controller recording, rig-constrained reconstruction,
-hardware triggers and automatic georeferencing are future work. The initial COLMAP
-pipeline does **not** consume the recorded IMU.
-
-## First capture
-
-After the USB permissions and NVMe setup in [Jetson setup](docs/jetson-setup.md):
+Follow [Jetson setup](docs/jetson-setup.md) for USB permissions, NVMe and service deployment.
 
 ```bash
-git clone https://github.com/WalleringRobotics/mapping_functionality.git
+git clone --branch feat/oak-photogrammetry-foundation \
+  https://github.com/WalleringRobotics/mapping_functionality.git
 cd mapping_functionality
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e '.[oak]'
-wr-map inspect
-wr-map record --config configs/oakd-survey.json \
+wr-map doctor --mode capture --config configs/oakd-survey.json \
+  --output-root /mnt/nvme/mapping --probe-device
+wr-map capture --config configs/oakd-survey.json \
   --output /mnt/nvme/mapping/bench-001 --duration 60
+wr-map status /mnt/nvme/mapping/bench-001
 wr-map validate /mnt/nvme/mapping/bench-001
 ```
 
-Use a **new directory** each time. Without `--duration`, record until Ctrl+C/SIGTERM.
-The default requests 2 fps per camera, RGB JPEG quality 97 and lossless mono PNG.
-`configs/oakd-lossless.json` requests 1 fps with RGB PNG. These are bench starting
-profiles; measure throughput and tune exposure/focus before a moving capture.
+Use a new directory for every capture. Omit `--duration` to stop with Ctrl+C or
+SIGTERM. `record` remains an alias for `capture`. The default requests RGB and two
+mono cameras at 2 fps with fixed exposure/focus, JPEG RGB and lossless mono PNG.
+The lossless recipe requests 1 fps and PNG throughout. Both need bench qualification.
 
-## Workstation postprocessing
+The recorder saves factory calibration, full-FOV images, raw IMU when available,
+per-stream timestamps, sequence numbers and checksums. Bounded buffering, disk
+reserve and stream/IMU watchdogs fail explicitly. Live `status.json` updates every
+five seconds; `wr-map status` flags stale recording heartbeats. Clean completion
+means accepted data was drained and sealed, not that a survey meets accuracy targets.
+
+## Mode 2 — offline processing
+
+Copy the complete session to the workstation. Install Python extras and the
+external engines using [postprocessing setup](docs/postprocessing.md).
 
 ```bash
-# Transfer the entire session, including calibration and journals, then validate.
-wr-map validate /data/sessions/bench-001
-wr-map export /data/sessions/bench-001 --output /data/projects/bench-001 \
-  --stream rgb --interval 1
+pip install -e '.[processing,terrain]'
+wr-map doctor --mode process --backend building --output-root /data/runs
 
-# Without --execute, print the plan without creating output files.
-wr-map reconstruct /data/projects/bench-001 --output /data/runs/bench-001
-wr-map reconstruct /data/projects/bench-001 --output /data/runs/bench-001 --execute
+# Review the plan; no output files are created.
+wr-map process /data/sessions/bench-001 --config configs/process-building.json \
+  --output /data/runs/bench-001
 
-# Review sparse components and explicitly choose one for dense reconstruction.
-wr-map dense /data/projects/bench-001 --model /data/runs/bench-001/sparse/0 \
-  --output /data/runs/bench-001-dense --execute
+# Export → sparse model → quality gate → dense cloud → Poisson mesh.
+wr-map process /data/sessions/bench-001 --config configs/process-building.json \
+  --output /data/runs/bench-001 --execute
+
+# Retry safely using unchanged inputs/config; completed stages are hash-verified.
+wr-map process /data/sessions/bench-001 --config configs/process-building.json \
+  --output /data/runs/bench-001 --execute --resume
 ```
 
-The runner supports COLMAP **3.12.x** (baseline 3.12.6), not arbitrary newer CLI versions.
-Sparse extraction/matching can use `--cpu`; dense PatchMatch in this baseline needs
-CUDA. Outputs initially have arbitrary frame and scale. See
-[postprocessing](docs/postprocessing.md) for installation, GCPs and terrain products.
+For terrain, supply surveyed GCP observations or actual camera geolocation plus
+an explicit height reference. The tool does not invent GPS coordinates.
+
+```bash
+docker pull opendronemap/odm:3.6.2
+wr-map process /data/sessions/site-001 --config configs/process-terrain.json \
+  --output /data/runs/site-001 --gcp /data/control/site-001.txt \
+  --vertical-datum EGM2008 --execute
+```
+
+| Product recipe | Outputs | Coordinate/accuracy limits |
+|---|---|---|
+| Building/object | Binary sparse model, camera poses CSV, registration report, coloured PLY, Poisson PLY mesh | Arbitrary scale/origin until externally aligned; mesh is untextured |
+| Terrain | GeoTIFF orthomosaic and DSM, georeferenced LAZ, textured mesh; optional DTM | Requires real reference data; pixel resolution is not measured accuracy |
+
+`--prepare-only` produces verified selected inputs without invoking an engine.
+`workflow.json` records stage attempts and hashes; `report.json` lists product paths,
+quality and provenance. Failed outputs/logs are retained. Parameters are immutable
+within a run: change a recipe or control file by starting a new run directory.
+
+The lower-level `export`, `reconstruct`, `dense` and `accuracy` commands remain
+available. Recorded IMU and stereo images are preserved but are not yet consumed
+as rig/VIO constraints. GNSS acquisition, automatic building scale alignment and
+live SLAM are outside these modes.
 
 ## Development without hardware
 
 ```bash
-pip install -e '.[dev]'
+pip install -e '.[dev,processing,terrain]'
 wr-map simulate --output /tmp/mapping-fixture --frames 12
 wr-map validate /tmp/mapping-fixture
-wr-map export /tmp/mapping-fixture --output /tmp/mapping-export
-wr-map reconstruct /tmp/mapping-export --output /tmp/mapping-plan
+wr-map process /tmp/mapping-fixture --config configs/process-building.json \
+  --output /tmp/mapping-run --prepare-only
 pytest -q
 ruff check src tests
 ```
 
-Synthetic images are deliberately not a physical 3D scene; executing their SfM plan
-is rejected. CI runs camera-independent tests on Python 3.10 and 3.12.
+Synthetic IO images are not a physical 3D scene; engine execution rejects them.
+CI tests Python 3.10 and 3.12, including installed CLI preparation and resume.
 
-## Design documents
+## Design and field guides
 
 - [Architecture and decisions](docs/architecture.md)
 - [Dataset and timing contract](docs/dataset-format.md)
 - [Jetson setup and commissioning](docs/jetson-setup.md)
 - [Capture geometry and field procedure](docs/acquisition.md)
-- [Postprocessing and accuracy](docs/postprocessing.md)
-- [Camera upgrades and roadmap](docs/roadmap.md)
+- [Postprocessing recipes, control formats and recovery](docs/postprocessing.md)
+- [Camera upgrades and remaining qualification](docs/roadmap.md)
 - [Primary references and confidence](docs/references.md)
 
-License: Apache-2.0. Keep datasets, serial numbers, survey locations and credentials
-outside this public source repository.
+License: Apache-2.0. Keep datasets, serial numbers, locations and credentials outside
+this public source repository.

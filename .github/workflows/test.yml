@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -e '.[dev]'
+      - run: python -m pip install -e '.[dev,processing,terrain]'
       - run: ruff check src tests
       - run: pytest -q
       - name: Exercise installed CLI without camera
@@ -23,3 +23,5 @@ jobs:
           wr-map export /tmp/mapping-fixture --output /tmp/mapping-export
           wr-map reconstruct /tmp/mapping-export --output /tmp/mapping-plan
 
+          wr-map process /tmp/mapping-fixture --config configs/process-building.json --output /tmp/mapping-run --prepare-only
+          wr-map process /tmp/mapping-fixture --config configs/process-building.json --output /tmp/mapping-run --prepare-only --resume
