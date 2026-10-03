@@ -157,6 +157,8 @@ def bridge(config, output, duration=None):
                 data = response.read1(4096)
                 if not data:
                     raise RuntimeError("NTRIP correction stream closed unexpectedly")
+                if not guard.verified and time.monotonic() - start > config.timeout_seconds:
+                    raise RuntimeError("No surveyed-base verification before deadline")
                 for frame in decoder.feed(data):
                     details, allowed = guard.check(frame)
                     if not allowed and time.monotonic() - start > config.timeout_seconds:

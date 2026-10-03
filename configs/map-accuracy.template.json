@@ -12,5 +12,7 @@
   "minimum_checkpoints": 30,
   "horizontal_target_rmse_m": 0.1,
   "vertical_target_rmse_m": 0.15,
-  "map_extent_xy_m": null
+  "map_extent_xy_m": null,
+  "model_coordinates": "absolute",
+  "model_origin_xyz_m": null
 }

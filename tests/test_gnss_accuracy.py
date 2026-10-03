@@ -13,6 +13,7 @@ from wallering_mapping.gnss_accuracy import (
     PROFILE,
     ecef_and_enu,
     gps_source_ros_ns,
+    gps_bracket,
     image_accuracy,
     position_budget,
     read_profile,
@@ -36,6 +37,7 @@ def rtk_fixture(tmp_path, age=20, mode="px4_boot_via_mavros"):
     )
     profile["receiver"].update(
         model_firmware_evidence="synthetic receiver",
+        position_reference="ARP",
         gpsraw_time_mode=mode,
         timestamp_validation_evidence="synthetic clock truth",
         horizontal_accuracy_model="axis_1sigma",
@@ -50,9 +52,11 @@ def rtk_fixture(tmp_path, age=20, mode="px4_boot_via_mavros"):
         attitude_sigma_rad=0.001,
         calibration_evidence="synthetic known rig",
         orientation_in_base_tangent_enu_verified=True,
+        lever_from_receiver_reference_verified=True,
     )
     profile["motion"].update(
         speed_bound_m_s=1,
+        acceleration_bound_m_s2=2,
         angular_rate_bound_rad_s=0.1,
         receiver_latency_bound_ms=0,
         camera_latency_bound_ms=0,
@@ -134,6 +138,41 @@ def test_covariance_propagation_and_shared_base_not_averaged():
     np.testing.assert_allclose(
         budget["components_covariance_enu_m2"]["shared_base"], np.eye(3) * 0.0004
     )
+
+
+def test_moving_receiver_interpolates_ecef_without_halving_correlated_error(tmp_path):
+    root, alignment, path = rtk_fixture(tmp_path)
+    rows = list(jsonl(alignment / "associations.jsonl"))
+    rows[0]["exposure_monotonic_ns"] += 50_000_000
+    with (alignment / "associations.jsonl").open("w") as file:
+        for row in rows:
+            file.write(json.dumps(row) + "\n")
+    report = json.loads((alignment / "report.json").read_text())
+    report["output_hashes"]["associations.jsonl"] = sha256_file(alignment / "associations.jsonl")
+    write_json(alignment / "report.json", report)
+    image_accuracy(root, alignment, path, tmp_path / "accuracy")
+    result = list(jsonl(tmp_path / "accuracy/images.jsonl"))[0]
+    interpolation = result["receiver_interpolation"]
+    assert interpolation["after_weight"] == pytest.approx(0.5)
+    assert len(interpolation["samples"]) == 2
+    endpoints = [
+        ecef_and_enu([s["fields"]["lat"] / 1e7, s["fields"]["lon"] / 1e7, 100])[0]
+        for s in interpolation["samples"]
+    ]
+    _, base_axes = ecef_and_enu([52, 13, 100])
+    expected = (endpoints[0] + endpoints[1]) / 2 + base_axes.T @ np.array([1, 0, 0])
+    np.testing.assert_allclose(result["camera_ecef_m"], expected, atol=1e-8, rtol=0)
+    rover_cov = result["budget"]["components_covariance_enu_m2"]["rover"]
+    assert np.trace(rover_cov) == pytest.approx(2 * 0.01**2 + 0.02**2)
+    assert result["interpolation_curvature_allowance_m"] == pytest.approx(0.0025)
+
+
+def test_gps_interpolation_rejects_extrapolation_and_distant_endpoints():
+    rows = [{"mapped_monotonic_ns": t, "clock_budget_ns": 1} for t in [100, 200]]
+    assert gps_bracket(rows, [100, 200], 99, 1000) is None
+    assert gps_bracket(rows, [100, 200], 201, 1000) is None
+    assert gps_bracket(rows, [100, 200], 150, 49) is None
+    assert len(gps_bracket(rows, [100, 200], 100, 1)["samples"]) == 1
 
 
 def test_geodesy_matches_independent_pyproj_and_wrapped_unix_clock_conversion():
