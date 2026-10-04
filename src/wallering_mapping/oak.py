@@ -34,7 +34,13 @@ def device_details(device, dai):
         "imu_firmware": str(device.getIMUFirmwareVersion()) if has_imu else None,
         "imu_firmware_embedded": str(device.getEmbeddedIMUFirmwareVersion()) if has_imu else None,
         "cameras": [{"socket": str(f.socket), "sensor": f.sensorName,
-                     "width": f.width, "height": f.height, "autofocus": f.hasAutofocus}
+                     "width": f.width, "height": f.height, "autofocus": f.hasAutofocus,
+                     "sensor_modes": [{"width": mode.width, "height": mode.height,
+                                       "min_fps": mode.minFps, "max_fps": mode.maxFps,
+                                       "type": str(mode.type),
+                                       "sensor_crop": {key: getattr(mode.fov, key)
+                                                       for key in ("x", "y", "width", "height")}}
+                                      for mode in f.configs]}
                     for f in device.getConnectedCameraFeatures()],
     }
 
