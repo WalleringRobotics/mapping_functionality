@@ -121,7 +121,11 @@ def still_bias(stamps_s, gyro, window_s=0.5, max_std=0.02, max_rate=0.05):
 
 def excitation(rates):
     """Per-axis and weakest-direction RMS of angular rate samples (rad/s)."""
-    moment = rates.T @ rates / len(rates)
+    # A constant rate can be absorbed by bias/mounting and is not an independent
+    # excitation direction. In particular, a circular gyro trace plus a constant
+    # third component makes a clock phase shift indistinguishable from mounting.
+    centred = rates - rates.mean(axis=0)
+    moment = centred.T @ centred / len(rates)
     return {"rms_rate_rad_s": np.sqrt(np.diag(moment)).tolist(),
             "weakest_rate_rad_s": float(math.sqrt(max(np.linalg.eigvalsh(moment)[0], 0.0)))}
 
