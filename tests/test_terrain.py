@@ -155,6 +155,13 @@ def test_odm_engine_contract_and_final_camera_drift_gate(tmp_path, monkeypatch, 
     (prepared / "preparation.json").write_text(json.dumps(metadata))
     monkeypatch.setattr(odm, "resolve_image", lambda _: {"id": "sha256:fixture"})
     monkeypatch.setattr(odm.subprocess, "run", lambda *a, **kw: None)
+    # These are command orchestration fixtures, not actual GeoTIFF/LAZ files.
+    def inspected(image, output, config, container_name):
+        report = {"valid": True, "fixture": "orchestration-only"}
+        (output / "product-validation.json").write_text(json.dumps(report))
+        return report
+
+    monkeypatch.setattr(odm, "inspect_outputs", inspected)
     calls = []
 
     def engine(command, log):
@@ -210,7 +217,8 @@ def test_odm_engine_contract_and_final_camera_drift_gate(tmp_path, monkeypatch, 
         assert len(calls) == 2  # Stop before dense work with incorrect calibration.
     else:
         result = odm.execute(prepared, output, ProcessConfig(product="terrain"))
-        assert result["status"] == "complete" and len(result["products"]) == 6
+        assert result["status"] == "complete" and len(result["products"]) == 7
+        assert result["product_validation"]["valid"]
         assert len(calls) == 3
 
 

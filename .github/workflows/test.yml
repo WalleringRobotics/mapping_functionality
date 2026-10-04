@@ -73,3 +73,32 @@ jobs:
               for p in depthai_ros_driver mavros mavros_extras rosbag2_storage_mcap; do ros2 pkg prefix "$p"; done
               python -m pytest -q
             '
+  postprocessing-x86:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up the native x86-64 processing workstation
+        run: bash deploy/setup-postprocessing.sh
+      - name: Exercise upstream OpenSfM sparse and dense processing
+        run: |
+          .venv-postprocess/bin/python deploy/check-opensfm.py \
+            --output runs/ci-opensfm --execute
+          .venv-postprocess/bin/python deploy/check-opensfm.py \
+            --output runs/ci-opensfm --execute --resume
+      - name: Check real GDAL and PDAL product validation
+        run: |
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1 \
+            --mount "type=bind,src=$PWD,dst=$PWD,readonly" \
+            --entrypoint /code/venv/bin/python3 opendronemap/odm:3.6.2 \
+            "$PWD/deploy/check-odm-products.py"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: opensfm-x86-evidence
+          path: |
+            runs/ci-opensfm/report.json
+            runs/ci-opensfm/workflow/workflow.json
+            runs/ci-opensfm/**/quality.json
+            runs/ci-opensfm/**/run.json
+            runs/ci-opensfm/**/logs/*.log

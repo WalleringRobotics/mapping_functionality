@@ -97,7 +97,7 @@ def doctor(mode, output_root, config=None, probe=False, device_id=None, backend=
                 check("pycolmap", True, pycolmap().__version__)
             except (ImportError, RuntimeError) as error:
                 check("pycolmap", False, str(error))
-        if backend == "terrain":
+        if backend in {"terrain", "opensfm"}:
             try:
                 import pyproj
                 check("pyproj", True, pyproj.__version__)
@@ -106,4 +106,3 @@ def doctor(mode, output_root, config=None, probe=False, device_id=None, backend=
     return {"ready": all(item["ok"] for item in checks), "mode": mode,
             "checks": checks, "device": details, "provenance": provenance(),
             "note": "Readiness checks are not a throughput or accuracy qualification."}
-

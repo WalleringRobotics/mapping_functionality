@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from . import odm, reconstruct
+from . import odm, opensfm, reconstruct
 from .dataset import safe_path, sha256_file, write_json
 from .export import export
 from .model import assess_model
@@ -90,12 +90,15 @@ def process(session, output, config, execute=False, prepare_only=False, resume=F
     stages = ["export"]
     if config.product == "terrain":
         stages += ["terrain-input", "odm"]
+    elif config.resolved_backend == "opensfm":
+        stages += ["opensfm-input", "opensfm"]
     else:
         stages += ["sparse", "quality"] + (["dense"] if config.dense else [])
         stages += ["mesh"] if config.mesh else []
     if not execute and not prepare_only:
         return {"status": "planned", "inputs": inputs, "output": str(output), "stages": stages,
-                "engine": "COLMAP 3.12.x" if config.product == "building" else config.odm_image,
+                "engine": "COLMAP 3.12.x" if config.resolved_backend == "colmap" else config.odm_image,
+                "backend": config.resolved_backend,
                 "note": "No outputs written; use --prepare-only or --execute"}
     # O_EXCL creation prevents two new runs sharing a directory. An advisory lock
     # serializes explicit resumes before reading or changing the workflow journal.
@@ -131,6 +134,14 @@ def process(session, output, config, execute=False, prepare_only=False, resume=F
                         product_root, result = workflow.stage("odm", lambda p: odm.execute(prepared, p, config))
                         products = [product_root / item["path"] for item in result["products"]]
                         quality = result["quality"]
+                elif config.resolved_backend == "opensfm":
+                    prepared, _ = workflow.stage("opensfm-input", lambda p: opensfm.prepare(
+                        project, p, config))
+                    if execute:
+                        product_root, result = workflow.stage("opensfm", lambda p: opensfm.execute(
+                            prepared, p, config))
+                        products = [product_root / item["path"] for item in result["products"]]
+                        quality = result["quality"]
                 elif execute:
                     sparse, _ = workflow.stage("sparse", lambda p: reconstruct.execute(
                         reconstruct.sparse_plan(project, p, config.matcher, config.cpu)))
@@ -152,7 +163,7 @@ def process(session, output, config, execute=False, prepare_only=False, resume=F
                                       products=inventory(output, products) if products else workflow.state.get("products", []),
                                       quality=quality or workflow.state.get("quality"),
                                       accuracy_claim="Not verified; assess independent checkpoints",
-                                      coordinate_frame="Unscaled COLMAP world" if config.product == "building"
+                                      coordinate_frame=f"Unscaled {config.resolved_backend.upper()} world" if config.product == "building"
                                       else "External reference; height convention supplied by operator")
                 if execute:
                     workflow.state["completed_utc_ns"] = time.time_ns()

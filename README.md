@@ -2,8 +2,9 @@
 
 **Two operating modes: record on Jetson Orin Nano + Luxonis OAK-D, then process offline on a workstation.**
 
-The processing mode supports **building/object geometry** with COLMAP and
-**terrain maps** with OpenDroneMap. Original photographs, calibration, inertial
+The processing mode targets an **x86-64 Linux workstation**: **building/object
+geometry** with OpenSfM and **terrain maps** with OpenDroneMap, using one official
+ODM Docker image. COLMAP remains an optional alternative. Original photographs, calibration, inertial
 measurements and timing evidence remain available for future camera and algorithm upgrades.
 
 **Status:** OAK BNO086 firmware has been upgraded to 3.9.9. Acquisition now uses
@@ -75,33 +76,36 @@ qualified camera geolocation; `map-accuracy` reports independent checkpoint erro
 reference uncertainty and shared base bias. Receiver semantics, time convention
 and antenna-to-camera calibration must be supplied from the actual installation.
 
-## Mode 2 — offline processing
+## Mode 2 — offline processing on x86-64
 
-Copy the complete ROS session to the workstation and run `bag-import` into a separate image dataset. The examples below use that derived dataset. Install Python extras and the
-external engines using [postprocessing setup](docs/postprocessing.md).
+Copy the complete ROS session to the workstation and run `bag-import` into a separate
+image dataset. Docker Engine and Python 3.10–3.12 are the only host prerequisites.
+The setup installs the small import/checking environment and pulls the pinned
+official ODM image; OpenSfM is already bundled inside it.
 
 ```bash
-pip install -e '.[bags,processing,terrain]'
-wr-map doctor --mode process --backend building --output-root /data/runs
+bash deploy/setup-postprocessing.sh
+source .venv-postprocess/bin/activate
+wr-map doctor --mode process --backend opensfm --output-root /data/runs
+wr-map bag-import /data/recordings/site-001 --output /data/sessions/site-001
 
 # Review the plan; no output files are created.
-wr-map process /data/sessions/bench-001 --config configs/process-building.json \
-  --output /data/runs/bench-001
+wr-map process /data/sessions/site-001 --config configs/process-opensfm.json \
+  --output /data/runs/site-001-geometry
 
-# Export → sparse model → quality gate → dense cloud → Poisson mesh.
-wr-map process /data/sessions/bench-001 --config configs/process-building.json \
-  --output /data/runs/bench-001 --execute
+# OpenSfM performs feature matching, reconstruction and dense stereo.
+wr-map process /data/sessions/site-001 --config configs/process-opensfm.json \
+  --output /data/runs/site-001-geometry --execute
 
 # Retry safely using unchanged inputs/config; completed stages are hash-verified.
-wr-map process /data/sessions/bench-001 --config configs/process-building.json \
-  --output /data/runs/bench-001 --execute --resume
+wr-map process /data/sessions/site-001 --config configs/process-opensfm.json \
+  --output /data/runs/site-001-geometry --execute --resume
 ```
 
 For terrain, supply surveyed GCP observations or actual camera geolocation plus
 an explicit height reference. The tool does not invent GPS coordinates.
 
 ```bash
-docker pull opendronemap/odm:3.6.2
 wr-map process /data/sessions/site-001 --config configs/process-terrain.json \
   --output /data/runs/site-001 --gcp /data/control/site-001.txt \
   --vertical-datum EGM2008 --execute
@@ -109,8 +113,9 @@ wr-map process /data/sessions/site-001 --config configs/process-terrain.json \
 
 | Product recipe | Outputs | Coordinate/accuracy limits |
 |---|---|---|
-| Building/object | Binary sparse model, camera poses CSV, registration report, coloured PLY, Poisson PLY mesh | Arbitrary scale/origin until externally aligned; mesh is untextured |
+| Building/object (OpenSfM) | Native reconstruction JSON, tracks, calibration, registration report, sparse and dense PLY | Arbitrary scale/origin; independent measured control required |
 | Terrain | GeoTIFF orthomosaic and DSM, georeferenced LAZ, textured mesh; optional DTM | Requires real reference data; pixel resolution is not measured accuracy |
+| Building/object (optional COLMAP) | Binary sparse model, camera poses CSV, coloured PLY, Poisson mesh | Separate COLMAP/CUDA setup; arbitrary scale/origin until aligned |
 
 `--prepare-only` produces verified selected inputs without invoking an engine.
 `workflow.json` records stage attempts and hashes; `report.json` lists product paths,
@@ -118,7 +123,9 @@ quality and provenance. Failed outputs/logs are retained. Parameters are immutab
 within a run: change a recipe or control file by starting a new run directory.
 
 The lower-level `export`, `reconstruct`, `dense` and `accuracy` commands remain
-available. Recorded IMU and stereo images are preserved but are not yet consumed
+available. The [processing guide](docs/postprocessing.md) covers optional COLMAP
+installation and the native ODM workflow for ordinary geotagged photos.
+Recorded IMU and stereo images are preserved but are not yet consumed
 as rig/VIO constraints. Qualified MAVROS RTK camera geolocation is available for
 terrain; `georeference` aligns building models and PLY products to metric projected
 coordinates. Navigation alignment does not establish surface accuracy. Live SLAM

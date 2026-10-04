@@ -7,16 +7,39 @@ Keep the original MCAP alongside it for inertial and telemetry processing.
 
 ## Workstation setup
 
-Use Linux and Python 3.10–3.12. Capture dependencies and processing dependencies are
-separate; the Orin need not install reconstruction engines.
+Use the **x86-64 Linux workstation** for offline reconstruction. Capture stays on
+the Orin; copy the complete stopped dataset to the workstation. The standard path
+uses one official **OpenDroneMap 3.6.2 Docker image**, including its pinned OpenSfM
+engine. No ROS, separate OpenSfM build, PyCOLMAP or CUDA installation is required.
+The small host virtual environment handles import, calibration conversion and
+auditing; reconstruction runs inside that image.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[bags,processing,terrain]'
+bash deploy/setup-postprocessing.sh
+source .venv-postprocess/bin/activate
+wr-map doctor --mode process --backend opensfm --output-root /data/runs
+wr-map doctor --mode process --backend terrain --output-root /data/runs
 ```
 
-For buildings, install a CUDA-enabled **COLMAP 3.12.6** workstation build using the
+The setup script creates the environment and pulls the pinned official image.
+Docker must already be installed and accessible to the operator. The runner resolves
+the locally installed tag to its immutable image ID, verifies the engine's version,
+and records image ID/digests. A recipe can pin
+`opendronemap/odm@sha256:<64 hexadecimal characters>` instead. Mutable `latest` tags
+are rejected. Containers use the operator's UID/GID, a private run directory and no
+network. Rootless Docker UID mappings and SELinux mounts may need local deployment
+adjustments. Docker access is not configured by this package.
+
+`doctor` checks dependencies and writable/free storage; it does not verify the
+Docker daemon/image, benchmark resource use or qualify a survey. Version/container
+checks also run when executing the relevant engine. Allow ample disk space:
+immutable originals, exports, derived PNGs/masks, engine inputs, databases, depth
+maps and failed attempts are retained. No automatic pruning occurs.
+
+### Optional COLMAP alternative
+
+Existing COLMAP recipes remain supported. Install `.[processing]` in the host
+environment and a CUDA-enabled **COLMAP 3.12.6** workstation build using the
 [official release/source instructions](https://github.com/colmap/colmap/releases/tag/3.12.6).
 Check `colmap -h` and `colmap feature_extractor -h`. The runner gates CLI execution
 to 3.12.x. The pinned `pycolmap==3.12.6` package reads models and reports poses; it does
@@ -24,25 +47,9 @@ not install the `colmap` executable. `cpu: true` changes sparse SIFT extraction 
 matching only. Dense PatchMatch still needs CUDA; for CPU-only sparse processing,
 set `dense: false` and `mesh: false` in a copied recipe.
 
-For terrain, install Docker, give the operator access to its daemon, and explicitly
-pull `opendronemap/odm:3.6.2`. The runner resolves the locally installed tag to its
-immutable image ID, verifies the engine's version, and records image ID/digests.
-A recipe can pin `opendronemap/odm@sha256:<64 hexadecimal characters>` instead.
-Mutable `latest` tags are rejected. Containers use the operator's UID/GID, a private
-run directory and no network. Rootless Docker UID mappings and SELinux mounts may
-need local deployment adjustments. Docker access is not configured by this package.
-
 ```bash
 wr-map doctor --mode process --backend building --output-root /data/runs
-wr-map doctor --mode process --backend terrain --output-root /data/runs
-docker pull opendronemap/odm:3.6.2
 ```
-
-`doctor` checks dependencies and writable/free storage; it does not benchmark GPU
-memory, verify the Docker daemon/image, or qualify a survey. Version/container checks
-also run when executing the relevant engine. Allow ample disk space: immutable
-originals, exports, derived PNGs/masks, engine inputs, databases, depth maps and
-failed attempts are retained. No automatic pruning occurs.
 
 ## PyCOLMAP on Jetson ARM64
 
@@ -89,15 +96,15 @@ reconstructions; recording stereo does not automatically supply metric scale.
 
 ```bash
 # Plan only; validates the source but creates no output files.
-wr-map process /data/sessions/building-001 --config configs/process-building.json \
+wr-map process /data/sessions/building-001 --config configs/process-opensfm.json \
   --output /data/runs/building-001
 
 # Optional input preparation before a long engine run.
-wr-map process /data/sessions/building-001 --config configs/process-building.json \
+wr-map process /data/sessions/building-001 --config configs/process-opensfm.json \
   --output /data/runs/building-001 --prepare-only
 
 # Continue the prepared run.
-wr-map process /data/sessions/building-001 --config configs/process-building.json \
+wr-map process /data/sessions/building-001 --config configs/process-opensfm.json \
   --output /data/runs/building-001 --execute --resume
 ```
 
@@ -123,7 +130,71 @@ Changing configuration, including choosing a different sparse `model_index`, req
 a new run. For manual reuse of an inspected existing model, use the lower-level
 `dense` command. No existing model/database is silently overwritten.
 
-## Building/object recipe
+## OpenSfM building/object recipe
+
+`configs/process-opensfm.json` delegates feature detection, matching, tracks,
+reconstruction, bundle adjustment, sparse export and dense stereo to the upstream
+OpenSfM bundled in ODM. Its source revision is
+[`c5328439465e6ace011f39077d1077d7b1cdd65d`](https://github.com/OpenDroneMap/ODM/blob/v3.6.2/SuperBuild/cmake/External-OpenSfM.cmake).
+The runner checks source-interface hashes and records native-library hashes plus
+the immutable Docker image ID before running. `backend: "opensfm"` selects this
+engine; the terrain recipe selects ODM. Older recipes without a backend field
+retain their original COLMAP/ODM behavior.
+
+Preparation creates a native `dataset/` containing images, masks, fixed camera
+overrides, EXIF overrides and `config.yaml`. Rational/fisheye calibration is
+converted through the same OpenCV geometry used for ODM, preserving original
+dimensions and intrinsic matrix. Derived PNGs have no inherited EXIF GPS. Selection
+timestamps and source calibration remain in the preparation audit; device times
+are not represented as invented EXIF epochs. Native image masks exclude unusable
+undistortion boundaries. The prepared dataset also works with the pinned
+[upstream CLI](https://github.com/OpenDroneMap/OpenSfM/tree/c5328439465e6ace011f39077d1077d7b1cdd65d/bin).
+
+The engine uses SIFT/FLANN visual matching, fixed intrinsics and no GPS/GCP priors.
+`matcher: "exhaustive"` pairs all images; `"sequential"` uses upstream matching by
+filename with eight neighbors. Sequential selection does not guarantee loop or
+cross-track closure. `max_concurrency` bounds upstream processes; `max_image_size`
+bounds feature/undistorted-image resolution. Native depthmaps use up to 640 pixels
+width. Set `dense: false` for sparse-only processing; keep `mesh: false` for this
+backend. Use the ODM terrain recipe for georeferenced rasters and textured meshes.
+
+After upstream reconstruction, the runner verifies the applied calibration,
+camera/point coordinates, selected-image membership and the same default 90%
+registration/100-point quality gates. Multiple components require an explicit
+`model_index`; the complete upstream reconstruction is preserved before staging
+the selected component. These gates run before dense stereo. Empty dense clouds
+are failures, even when upstream exits successfully.
+
+Products are native `reconstruction.json` (including camera poses), `tracks.csv`,
+`camera_models.json`, sparse `reconstruction.ply`, `quality.json` and, when enabled,
+`undistorted/depthmaps/merged.ply`. Upstream rotation vectors/translations describe
+camera-from-world poses; world axes, origin and scale are arbitrary. OpenSfM may
+write a default geographic-origin file internally; it is not measured geolocation.
+This workflow makes no metric scale, RTK or centimetre-accuracy claim. Existing
+`georeference` operates on COLMAP models; it does not yet align native OpenSfM
+products. Use qualified control through ODM for the georeferenced terrain path.
+
+### Reproducible upstream sample check
+
+Before processing a field dataset, run the three-photo Berlin example already
+bundled inside the same official image:
+
+```bash
+python deploy/check-opensfm.py --output runs/opensfm-berlin-check
+python deploy/check-opensfm.py --output runs/opensfm-berlin-check --execute --resume
+```
+
+The first command prepares inputs; the second reconstructs them. Each stage is
+sealed and retryable through the same workflow journal. Image and reference-camera
+hashes are pinned to the upstream source revision. The harness converts the
+example's perspective camera to the equivalent pixel-intrinsic/radial model and
+passes that through the real production adapter. It supplies no reference poses,
+points or GPS to the new reconstruction. Calibration comes from upstream's example
+reconstruction, **not a measured OAK calibration**. Passing this check establishes
+software interoperability only; it does not qualify capture hardware or survey
+accuracy. Use `--sparse-only` on both commands for a sparse-only test.
+
+## COLMAP building/object alternative
 
 `configs/process-building.json` runs export, feature extraction, exhaustive matching,
 incremental mapping, sparse quality assessment, dense fusion, and Poisson meshing.
@@ -229,6 +300,13 @@ The runner requires nonempty orthomosaic GeoTIFF, DSM GeoTIFF and georeferenced 
 mesh is enabled by default and includes available texture/material files. `dtm: true`
 adds DTM generation/verification. Request it only with defensible ground classification
 and visible ground. Dense vegetation does not yield measured bare earth by configuration.
+
+Before accepting completion, GDAL decodes the rasters and PDAL streams the LAZ
+inside the same ODM image. `product-validation.json` records pixel spacing, valid
+data, point count, bounds and the actual CRS. Empty/corrupt data, incompatible
+coordinate systems, non-metric axes and disjoint extents fail the run. These are
+file and coordinate-consistency checks; supplied height labels do not perform a
+vertical datum conversion or establish independent accuracy.
 
 `orthophoto_cm` and `dem_cm` specify output pixel spacing in centimetres. They do not
 assert that imagery supports that detail or that absolute accuracy matches it. Inspect
