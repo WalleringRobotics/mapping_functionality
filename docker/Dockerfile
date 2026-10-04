@@ -76,7 +76,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/ros-snapshots.asc] http://snapshots
       ros-humble-depthai-ros-driver \
       ros-humble-rosbag2-storage-mcap \
       ros-humble-mavros ros-humble-mavros-extras \
-      ca-certificates git python3-pip python3-venv usbutils procps \
+      bzip2 ca-certificates git python3-pip python3-venv usbutils procps \
     && rm -rf /var/lib/apt/lists/*
 # MAVROS refuses to start without its geoid/gravity/magnetic models.
 RUN geographiclib-get-geoids egm96-5 \
