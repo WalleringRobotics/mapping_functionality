@@ -87,6 +87,7 @@ def parser():
     sync.add_argument("--output", type=Path, required=True)
     sync.add_argument("--stream", choices=["rgb", "left", "right"], default="rgb")
     sync.add_argument("--min-fraction", type=float, default=.9)
+    sync.add_argument("--rig-calibration", type=Path, help="Apply camera->body transform and OAK->PX4 time offset")
     ntrip = commands.add_parser("ntrip", help="Forward verified fixed-base NTRIP v2 corrections through MAVROS")
     ntrip.add_argument("--config", type=Path, required=True)
     ntrip.add_argument("--output", type=Path, required=True)
@@ -97,6 +98,7 @@ def parser():
     images_accuracy.add_argument("--profile", type=Path, required=True)
     images_accuracy.add_argument("--output", type=Path, required=True)
     images_accuracy.add_argument("--project", type=Path, help="Restrict geolocation to an existing selected image export")
+    images_accuracy.add_argument("--rig-calibration", type=Path, help="Lever arm and camera latency from the rig calibration used by sync")
     map_accuracy = commands.add_parser("map-accuracy", help="Assess withheld checkpoints and reference-aware map accuracy")
     map_accuracy.add_argument("checkpoints", type=Path)
     map_accuracy.add_argument("--profile", type=Path, required=True)
@@ -255,7 +257,7 @@ def main(argv=None):
             return 0 if result["valid"] else 2
         elif args.command == "sync":
             from .association import associate
-            result = associate(args.session, args.output, args.stream, args.min_fraction)
+            result = associate(args.session, args.output, args.stream, args.min_fraction, args.rig_calibration)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
         elif args.command == "ntrip":
@@ -263,7 +265,8 @@ def main(argv=None):
             result = bridge(NtripConfig.read(args.config), args.output, args.duration)
         elif args.command == "image-accuracy":
             from .gnss_accuracy import image_accuracy
-            result = image_accuracy(args.session, args.alignment, args.profile, args.output, args.project)
+            result = image_accuracy(args.session, args.alignment, args.profile, args.output, args.project,
+                                    args.rig_calibration)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
         elif args.command == "map-accuracy":

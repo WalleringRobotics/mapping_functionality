@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from pyproj import Transformer
 
+from test_association import add_factory, rig_file
 from test_mavros import PARAMETERS, clock, header, telemetry_fixture
 from test_rtcm import base_frame, frame
 from wallering_mapping.association import associate
@@ -25,7 +26,7 @@ from wallering_mapping.cli import main
 from wallering_mapping.export import export
 
 
-def rtk_fixture(tmp_path, age=20, mode="px4_boot_via_mavros"):
+def rtk_fixture(tmp_path, age=20, mode="px4_boot_via_mavros", rig_calibration=None, stream="rgb"):
     root, _ = telemetry_fixture(tmp_path / "capture")
     profile = copy.deepcopy(PROFILE)
     base = profile["base"]
@@ -113,9 +114,18 @@ def rtk_fixture(tmp_path, age=20, mode="px4_boot_via_mavros"):
     manifest["counts"].update(telemetry_gps_raw=20, telemetry_rtcm=20)
     manifest["journals_sha256"]["telemetry"] = sha256_file(root / "telemetry.jsonl")
     write_json(root / "manifest.json", manifest)
+    if stream != "rgb":
+        frames = [{**row, "stream": stream} for row in jsonl(root / "frames.jsonl")]
+        (root / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in frames))
+        manifest["config"]["streams"] = [stream]
+        manifest["counts"][stream] = manifest["counts"].pop("rgb")
+        manifest["journals_sha256"]["frames"] = sha256_file(root / "frames.jsonl")
+        write_json(root / "manifest.json", manifest)
+    if rig_calibration:
+        add_factory(root)
     assert validate(root)["valid"]
     alignment = tmp_path / "alignment"
-    assert associate(root, alignment)["passed"]
+    assert associate(root, alignment, stream=stream, rig_calibration=rig_calibration)["passed"]
     path = tmp_path / "profile.json"
     write_json(path, profile)
     return root, alignment, path
@@ -296,3 +306,107 @@ def test_missing_evidence_and_unknown_covariance_produce_partial_report(tmp_path
     write_json(path, profile)
     with pytest.raises(ValueError, match="semidefinite"):
         read_profile(path)
+
+
+def test_identity_rig_calibration_reproduces_profile_lever_results(tmp_path):
+    # Same lever, covariance and zero latency as the profile: camera at 1 m forward, antenna at the origin.
+    calibration = rig_file(tmp_path / "rig.json", camera_m=(1, 0, 0), camera_sigma=(0, 0.001))
+    root, alignment, path = rtk_fixture(tmp_path, rig_calibration=calibration, stream="left")
+    plain_alignment = tmp_path / "plain-alignment"
+    associate(root, plain_alignment, stream="left")
+    plain = image_accuracy(root, plain_alignment, path, tmp_path / "plain")
+    report = image_accuracy(root, alignment, path, tmp_path / "rig", rig_calibration=calibration)
+    assert not report["passed"] and report["qualified_images"] == 0
+    assert plain["qualified_images"] == 3
+    for before, after in zip(
+        jsonl(tmp_path / "plain/images.jsonl"), jsonl(tmp_path / "rig/images.jsonl"), strict=True
+    ):
+        assert not after["qualified"] and any("ROS IMU offset" in r for r in after["reasons"])
+        assert after["camera_ecef_m"] == before["camera_ecef_m"]
+        assert after["time_motion_interval_seconds"] == before["time_motion_interval_seconds"]
+        for name in ("conditional_horizontal_95_plus_allowances_m", "conditional_vertical_95_plus_allowances_m"):
+            assert after["budget"][name] == pytest.approx(before["budget"][name], rel=1e-12)
+    assert "rig_calibration" not in plain and "warnings" not in plain
+    # Hand-filled profile rig fields are overridden, and say so.
+    assert report["warnings"] == [
+        "Profile rig.antenna_to_camera_flu_m overridden by the rig calibration",
+        "Profile rig.lever_covariance_flu_m2 overridden by the rig calibration",
+        "Profile rig.calibration_evidence overridden by the rig calibration",
+        "Profile rig.lever_from_receiver_reference_verified overridden by the rig calibration",
+    ]
+    assert report["rig_calibration"]["effective_rig"]["antenna_to_camera_flu_m"] == [1, 0, 0]
+
+
+def test_camera_centres_shift_by_calibrated_lever_and_offset_sigma(tmp_path, capsys):
+    calibration = rig_file(
+        tmp_path / "rig.json",
+        camera_rpy=(180, 0, -90),
+        camera_m=(0.3, 0.1, -0.2),
+        camera_sigma=(0.01, 0.002),
+        antenna_m=(-0.2, 0, 0.3),
+        antenna_sigma=0.002,
+        sigma_ns=1_000_000,
+    )
+    root, alignment, path = rtk_fixture(tmp_path, rig_calibration=calibration, stream="left")
+    profile = json.loads(path.read_text())
+    profile["rig"].update(antenna_to_camera_flu_m=None, lever_covariance_flu_m2=None, calibration_evidence=None)
+    profile["motion"]["camera_latency_bound_ms"] = 2
+    write_json(path, profile)
+    args = ["image-accuracy", str(root), "--alignment", str(alignment), "--profile", str(path)]
+    assert main([*args, "--output", str(tmp_path / "rig"), "--rig-calibration", str(calibration)]) == 2
+    capsys.readouterr()
+    report = json.loads((tmp_path / "rig/report.json").read_text())
+    assert not report["geo_available"] and report["warnings"] == [
+        "Profile rig.lever_from_receiver_reference_verified overridden by the rig calibration"
+    ]
+    lever = np.array([0.5, 0.1, -0.5])
+    assert report["rig_calibration"]["antenna_lever"]["antenna_to_camera_flu_m"] == pytest.approx(lever)
+    assert report["rig_calibration"]["effective_motion"]["camera_latency_bound_ms"] == 2
+    _, base_axes = ecef_and_enu([52, 13, 100])
+    rows = list(jsonl(tmp_path / "rig/images.jsonl"))
+    for row, association in zip(rows, jsonl(alignment / "associations.jsonl"), strict=True):
+        samples = row["receiver_interpolation"]["samples"]
+        weights = [1 - row["receiver_interpolation"]["after_weight"], row["receiver_interpolation"]["after_weight"]]
+        antenna = sum(
+            w * ecef_and_enu([s["fields"]["lat"] / 1e7, s["fields"]["lon"] / 1e7, 100])[0]
+            for w, s in zip(weights, samples)
+        )
+        # Level body facing east in the base tangent frame: the FLU lever is the ENU offset.
+        np.testing.assert_allclose(row["camera_ecef_m"], antenna + base_axes.T @ lever, atol=1e-8, rtol=0)
+        np.testing.assert_allclose(
+            row["budget"]["components_covariance_enu_m2"]["lever_calibration"],
+            np.eye(3) * 2 * 0.002**2,
+            atol=1e-15,
+        )
+        # The measured profile exposure bound remains; the unrelated ROS offset is not counted.
+        assert association["estimated_alignment_budget_ms"] > 1
+        assert row["time_motion_interval_seconds"] == pytest.approx(
+            (association["estimated_alignment_budget_ms"] + row["receiver_interpolation"]["clock_budget_ns"] / 1e6 + 2)
+            / 1000
+        )
+
+
+def test_incomplete_rig_calibration_blocks_image_qualification(tmp_path):
+    calibration = rig_file(tmp_path / "rig.json", camera_m=(1, 0, 0), unset=[("base_link", "gnss_antenna_arp")])
+    root, alignment, path = rtk_fixture(tmp_path, rig_calibration=calibration, stream="left")
+    report = image_accuracy(root, alignment, path, tmp_path / "rig", rig_calibration=calibration)
+    assert not report["passed"] and report["qualified_images"] == 0
+    for row in jsonl(tmp_path / "rig/images.jsonl"):
+        assert row["budget"] is None
+        assert "Rig calibration incomplete: base_link->gnss_antenna_arp" in row["reasons"]
+        assert "Base, rig or motion uncertainty components are missing" in row["reasons"]
+    plain = tmp_path / "plain-alignment"
+    associate(root, plain, stream="left")
+    with pytest.raises(ValueError, match="rerun sync --rig-calibration"):
+        image_accuracy(root, plain, path, tmp_path / "mismatch", rig_calibration=calibration)
+
+
+def test_rig_gating_cannot_be_bypassed_by_omitting_accuracy_option(tmp_path):
+    calibration = rig_file(tmp_path / "rig.json")
+    root, alignment, path = rtk_fixture(tmp_path, rig_calibration=calibration)
+    with pytest.raises(ValueError, match="preserve gating"):
+        image_accuracy(root, alignment, path, tmp_path / "accuracy")
+    report = image_accuracy(root, alignment, path, tmp_path / "rig", rig_calibration=calibration)
+    assert report["qualified_images"] == 0
+    assert report["rig_calibration"]["antenna_lever"]["lever_covariance_flu_m2"] is None
+    assert all(row["budget"] is None for row in jsonl(tmp_path / "rig/images.jsonl"))

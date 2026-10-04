@@ -121,6 +121,22 @@ a few seconds still at the start; then 30–60 s of hand-held rotation about all
 (roughly ±20–30° at 0.5–1 Hz, with changes of speed so the offset is observable), in front
 of a textured, well-lit scene a few metres away; short exposure to avoid motion blur.
 
+## Using the calibration
+
+`wr-map sync --rig-calibration FILE` applies the camera-to-body spatial transform
+to produce diagnostic camera poses. `wr-map image-accuracy --rig-calibration FILE`
+uses its antenna-to-camera lever and covariance. Both reports retain link sources,
+unknown uncertainty and blocking reasons (see [MAVLink integration](mavlink-integration.md)
+and [RTK accuracy](rtk-accuracy.md)).
+
+The current `sync` consumer handles legacy SDK sessions only. A ROS IMU offset
+cannot be applied to SDK camera timestamps without validated clock-domain
+composition, including the camera exposure-to-IMU offset. Neither offset is
+applied here, and this explicitly blocks survey readiness. Unknown factory
+camera-to-camera covariance is preserved and also blocks RGB/right qualification.
+The accuracy profile must still supply measured exposure latency and vehicle
+attitude bounds; mounting sigma and gyro lag sigma do not substitute for them.
+
 ## IMU-to-IMU solver
 
 ```bash

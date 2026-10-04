@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .association import ClockMap
+from .association import ClockMap, rig_context
 from .dataset import jsonl, safe_path, sha256_file, write_json
 from .reconstruct import load_project
 from .rtcm import RTCMStream, describe
@@ -402,7 +402,41 @@ def gps_bracket(rows, times, exposure, max_age_ns):
     }
 
 
-def image_accuracy(session, alignment, profile_path, output, project=None):
+# Profile fields the rig calibration supplies; a non-default profile value is overridden with a warning.
+RIG_FIELDS = [("rig", "antenna_to_camera_flu_m"), ("rig", "lever_covariance_flu_m2"),
+              ("rig", "calibration_evidence"), ("rig", "lever_from_receiver_reference_verified")]
+
+
+def apply_rig_calibration(profile, path, session, alignment_report):
+    """Spatial calibration only; profile exposure latency and body-attitude bounds remain required."""
+    context = rig_context(path, session, alignment_report["stream"])
+    applied = (alignment_report.get("rig_calibration") or {}).get("sha256")
+    if applied != context["report"]["sha256"]:
+        raise ValueError("Alignment was not produced with this rig calibration; rerun sync --rig-calibration")
+    lever = context["calibration"].antenna_to_camera(context["camera"], context["factory"])
+    values = {
+        "antenna_to_camera_flu_m": lever and lever["antenna_to_camera_flu_m"],
+        "lever_covariance_flu_m2": lever and lever["lever_covariance_flu_m2"],
+        "calibration_evidence": f"rig calibration sha256 {context['report']['sha256']}",
+        # The calibrated antenna frame is the ARP; an APC/unknown receiver reference cannot match it.
+        "lever_from_receiver_reference_verified": profile["receiver"]["position_reference"] == "ARP",
+    }
+    if lever is not None and np.linalg.norm(lever["antenna_to_camera_flu_m"]) > 20:
+        raise ValueError("Invalid calibrated antenna-to-camera lever arm in body FLU metres")
+    effective = {"rig": dict(profile["rig"]), "motion": dict(profile["motion"])}
+    warnings = []
+    for section, name in RIG_FIELDS:
+        if profile[section][name] != PROFILE[section][name]:
+            warnings.append(f"Profile {section}.{name} overridden by the rig calibration")
+        effective[section][name] = values[name]
+    report = {**context["report"], "antenna_lever": lever, "effective_rig": effective["rig"],
+              "effective_motion": effective["motion"],
+              "camera_latency": "Profile bound required; ROS gyro offset sigma is not an exposure latency bound",
+              "attitude_uncertainty": "Profile body-attitude uncertainty; mounting sigma is a different quantity"}
+    return effective["rig"], effective["motion"], report, warnings
+
+
+def image_accuracy(session, alignment, profile_path, output, project=None, rig_calibration=None):
     session, alignment, output = session.resolve(), alignment.resolve(), output.resolve()
     for source in (session, alignment, project.resolve() if project else None):
         if source and (output.is_relative_to(source) or source.is_relative_to(output)):
@@ -433,6 +467,13 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
     base, receiver, rig, motion, policy = (
         profile[k] for k in ("base", "receiver", "rig", "motion", "policy")
     )
+    calibration_report, warnings = None, []
+    if rig_calibration:
+        rig, motion, calibration_report, warnings = apply_rig_calibration(
+            profile, rig_calibration, session, alignment_report
+        )
+    elif alignment_report.get("rig_calibration"):
+        raise ValueError("Alignment has a rig calibration; supply the same --rig-calibration to preserve gating")
     config = json.loads((session / "manifest.json").read_text())["telemetry"]["config"]
     ros = ClockMap([r for r in jsonl(session / "telemetry.jsonl") if r["record_type"] == "clock"])
     syncs = [r for r in jsonl(session / "telemetry.jsonl") if r.get("role") == "timesync"]
@@ -498,6 +539,10 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
         "gps_unavailable_samples": len(unavailable),
         "gps_unavailable_reasons": sorted(set(unavailable)),
     }
+    if calibration_report:
+        report["rig_calibration"] = calibration_report
+    if warnings:
+        report["warnings"] = warnings
     write_json(output / "report.json", report)
     results = []
     try:
@@ -591,13 +636,21 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
             reasons.extend(
                 label + " missing" for evidence, label in required_evidence if not evidence
             )
+            if calibration_report:
+                reasons.extend(
+                    "Rig calibration incomplete: " + item for item in calibration_report["blocking"]
+                )
             if not receiver["ellipsoidal_height_verified"]:
                 reasons.append("GPSRAW ellipsoidal-height extension unverified")
             if (
                 receiver["position_reference"] == "unknown"
                 or not rig["lever_from_receiver_reference_verified"]
             ):
-                reasons.append("Antenna reference/lever-arm convention is unverified")
+                reasons.append(
+                    "Rig calibration lever is to the antenna ARP; receiver reference is not ARP"
+                    if calibration_report
+                    else "Antenna reference/lever-arm convention is unverified"
+                )
             if not rig["orientation_in_base_tangent_enu_verified"]:
                 reasons.append("Body orientation is not verified in base-tangent ENU")
             if base["rover_uncertainty_includes_base"] is None:
