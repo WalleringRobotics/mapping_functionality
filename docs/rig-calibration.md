@@ -153,3 +153,15 @@ should provide: mono left and right at 20 fps (≥ 10 fps) with `/oak/imu/data` 
 a few seconds still at the start; then 30–60 s of hand-held rotation about all three axes
 (roughly ±20–30° at 0.5–1 Hz, with changes of speed so the offset is observable), in front
 of a textured, well-lit scene a few metres away; short exposure to avoid motion blur.
+
+## Using the calibration
+
+`wr-map sync --rig-calibration FILE` applies the OAK→PX4 time offset and the
+camera→body transform to produce camera poses; `wr-map image-accuracy
+--rig-calibration FILE` takes the antenna-to-camera lever arm, its covariance and the
+camera latency bound from it (see [MAVLink integration](mavlink-integration.md) and
+[RTK accuracy](rtk-accuracy.md)). Both reports list each link's source and treat
+`calibration-check`'s blocking items as blocking survey readiness. Offsets are added
+to the recorded exposure time (`DepthAI host-synced`, the same stamp the ROS driver
+publishes) to place it on the PX4 pose timeline, so a positive `offset_ns` means the
+OAK stamps exposures early relative to PX4.

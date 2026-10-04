@@ -176,6 +176,18 @@ foundation PR. These body positions are not automatically passed to ODM as camer
 centres: camera mounting, lever arm and coordinate transform must first be measured.
 GNSS covariance, fix status and height reference remain available for that work.
 
+With `--rig-calibration FILE` (the [rig calibration](rig-calibration.md) for this
+OAK), `sync` adds the OAK→PX4 `offset_ns` to each exposure before pose interpolation
+(the uncorrected time stays in `sdk_exposure_monotonic_ns`) and adds its `sigma_ns`
+to the alignment budget. Each association then also carries `camera_pose`
+(body pose composed with `base_link -> <stream camera>`; RGB and right via the OAK
+factory extrinsics in the session, treated as exact), and `camera-poses.csv` is
+written. `report.json` records the calibration sha256, link sources and sigmas,
+which links are `unset`, `manual_measurement` or `estimated` (`by_source`), and
+`survey_ready`/`blocking` from `calibration-check`. The "camera extrinsics not
+supplied" limitation is dropped only when the camera link and the OAK→PX4 offset
+are both set. Without the option the outputs are unchanged.
+
 For unattended capture, customize the foundation service to source the same ROS
 and platform overlay and pass `--telemetry-config`. The launcher accepts these through
 `WR_MAPPING_ROS_SETUP`, `WR_MAPPING_ROS_OVERLAY`, and `WR_MAPPING_TELEMETRY_CONFIG`
