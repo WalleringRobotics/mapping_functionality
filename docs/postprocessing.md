@@ -59,8 +59,9 @@ docker buildx build -f docker/Dockerfile --target pycolmap-wheel \
 .venv/bin/python -c 'import pycolmap; print(pycolmap.__version__, pycolmap.has_cuda)'
 ```
 
-The build stage selects the distro's CPU Ceres and repairs the wheel with
-auditwheel, so it bundles its native libraries; the host needs no compiler, devel
+PyCOLMAP 3.12.6's bindings require Ceres 2.1 or newer, but Ubuntu 22.04 ships 2.0, so
+the build stage compiles a checksum-pinned CPU Ceres 2.2.0 first. It repairs the wheel
+with auditwheel, so it bundles Ceres and its other native libraries; the host needs no compiler, devel
 packages or `LD_LIBRARY_PATH`. This CPU build supports model IO and quality
 assessment. It does not install a host COLMAP CLI or qualify CUDA dense
 reconstruction. Reduce `--build-arg BUILD_JOBS=1` if compiler memory pressure is high.

@@ -7,8 +7,8 @@
 #   docker buildx build -f docker/Dockerfile --target pycolmap-wheel \
 #     --output type=local,dest=runs/pycolmap-wheel .
 #
-# Pins: Ubuntu base digest, dated ROS snapshot (signed, key vendored here), COLMAP
-# commit (its fetched PoseLib/faiss archives are SHA256-pinned upstream) and every
+# Pins: Ubuntu base digest, dated ROS snapshot (signed, key vendored here), Ceres
+# release checksum, COLMAP commit (its fetched PoseLib/faiss archives are SHA256-pinned upstream) and every
 # Python package. Ubuntu archive packages follow jammy-updates; the resulting
 # versions are written to /opt/wallering/manifest/ in the image.
 
@@ -18,6 +18,7 @@ ARG UBUNTU_BASE=ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035
 # PyCOLMAP 3.12.6 from source: PyPI has no Linux ARM64 wheel for this release.
 # CPU-only; supports model IO and quality assessment, not the COLMAP CLI.
 FROM ${UBUNTU_BASE} AS pycolmap-build
+ARG CERES_VERSION=2.2.0
 ARG COLMAP_VERSION=3.12.6
 ARG COLMAP_COMMIT=4d5b60e19ad268072adaf1267d21fa38a9a828ca
 # Orin Nano (8 GB) runs out of memory above two compile jobs.
@@ -27,7 +28,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential ca-certificates git ninja-build patchelf python3-dev python3-venv \
       libboost-graph-dev libboost-program-options-dev libboost-system-dev \
-      libceres-dev libeigen3-dev libfreeimage-dev libgflags-dev libgoogle-glog-dev \
+      libeigen3-dev libfreeimage-dev libgflags-dev libgoogle-glog-dev \
       libglew-dev libgl-dev libmetis-dev libopenblas-dev libsqlite3-dev libsuitesparse-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
@@ -39,8 +40,18 @@ RUN python3 -m venv /build/venv \
     && /build/venv/bin/python -m pip install --no-cache-dir 'pip==26.2.1' \
     && /build/venv/bin/python -m pip install --no-cache-dir \
       'scikit-build-core==1.1.1' 'pybind11==3.0.1' 'cmake==3.31.10' 'auditwheel==6.8.2' 'numpy==1.26.4'
+# PyCOLMAP 3.12.6 binds Ceres >= 2.1 enums; jammy ships 2.0, so build a pinned CPU Ceres.
+ADD --checksum=sha256:48b2302a7986ece172898477c3bcd6deb8fb5cf19b3327bc49969aad4cede82d \
+    http://ceres-solver.org/ceres-solver-${CERES_VERSION}.tar.gz /build/ceres.tar.gz
+RUN tar xzf ceres.tar.gz \
+    && /build/venv/bin/cmake -S ceres-solver-"$CERES_VERSION" -B ceres-native -GNinja \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/build/install -DBUILD_SHARED_LIBS=ON \
+      -DUSE_CUDA=OFF -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+      -DBUILD_DOCUMENTATION=OFF \
+    && /build/venv/bin/cmake --build ceres-native -j"$BUILD_JOBS" \
+    && /build/venv/bin/cmake --install ceres-native
 RUN /build/venv/bin/cmake -S colmap -B native -GNinja \
-      -DCeres_DIR=/usr/lib/cmake/Ceres -DCMAKE_BUILD_TYPE=Release \
+      -DCeres_DIR=/build/install/lib/cmake/Ceres -DCMAKE_BUILD_TYPE=Release \
       '-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG' -DCMAKE_INSTALL_PREFIX=/build/install \
       -DCUDA_ENABLED=OFF -DGUI_ENABLED=OFF -DOPENGL_ENABLED=OFF -DCGAL_ENABLED=OFF \
       -DLSD_ENABLED=OFF -DDOWNLOAD_ENABLED=OFF -DTESTS_ENABLED=OFF -DIPO_ENABLED=OFF \
@@ -49,12 +60,12 @@ RUN /build/venv/bin/cmake -S colmap -B native -GNinja \
     && /build/venv/bin/cmake --install native
 RUN CMAKE_PREFIX_PATH=/build/install CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
       /build/venv/bin/python -m pip wheel --no-cache-dir --no-build-isolation --no-deps \
-      -Ccmake.define.Ceres_DIR=/usr/lib/cmake/Ceres \
+      -Ccmake.define.Ceres_DIR=/build/install/lib/cmake/Ceres \
       -Ccmake.define.GENERATE_STUBS=OFF \
       -Ccmake.define.CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
       '-Ccmake.define.CMAKE_CXX_FLAGS_RELEASE=-O1 -DNDEBUG' \
       -Cbuild-dir=/build/python-native ./colmap -w wheel \
-    && /build/venv/bin/auditwheel repair wheel/pycolmap-"$COLMAP_VERSION"-*.whl -w /out
+    && LD_LIBRARY_PATH=/build/install/lib /build/venv/bin/auditwheel repair wheel/pycolmap-"$COLMAP_VERSION"-*.whl -w /out
 
 # Export only the repaired wheel, e.g. for a host venv on the workstation.
 FROM scratch AS pycolmap-wheel
@@ -106,7 +117,7 @@ FROM base AS runtime
 COPY --from=pycolmap-build /out/ /tmp/pycolmap/
 RUN /opt/wr-venv/bin/python -m pip install --no-cache-dir --no-deps /tmp/pycolmap/*.whl \
     && rm -rf /tmp/pycolmap \
-    && /opt/wr-venv/bin/python -c 'import pycolmap; assert pycolmap.__version__ == "3.12.6"'
+    && /opt/wr-venv/bin/python -c 'import pycolmap; assert pycolmap.__version__ == "3.12.6"; print(pycolmap.__ceres_version__)'
 RUN mkdir -p /opt/wallering/manifest \
     && dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' > /opt/wallering/manifest/dpkg.txt \
     && /opt/wr-venv/bin/python -m pip freeze --all > /opt/wallering/manifest/pip.txt \
