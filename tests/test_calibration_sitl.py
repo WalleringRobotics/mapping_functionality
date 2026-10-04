@@ -22,6 +22,27 @@ def test_received_mavlink_binary_payloads_and_unknown_values_survive_json():
     assert json.loads(encoded) == {"data": [0, 127, 255], "nested": [{"params": [1., None]}]}
 
 
+@pytest.mark.parametrize("acks,passes", [([1, 0], True), ([2], False), ([1, 1, 1], False)])
+def test_arm_retries_only_temporary_rejection_with_bound_and_without_override(monkeypatch, acks, passes):
+    now, sent = [0.], []
+    link = sitl.Link.__new__(sitl.Link)
+    link.m = SimpleNamespace(MAV_RESULT_ACCEPTED=0, MAV_RESULT_TEMPORARILY_REJECTED=1)
+    link.connection = SimpleNamespace(mav=SimpleNamespace(command_long_send=lambda *args: sent.append(args)))
+    link.command_attempts = []
+    responses = iter(acks)
+    link.wait = lambda *args, **kwargs: SimpleNamespace(command=400, result=next(responses))
+    link.poll = lambda: now.__setitem__(0, now[0] + .25)
+    monkeypatch.setattr(sitl.time, "monotonic", lambda: now[0])
+    if passes:
+        link.command(400, 1, retry_temporary_s=2)
+        assert [attempt["ack"] for attempt in link.command_attempts] == [1, 0]
+    else:
+        with pytest.raises(ValueError, match="rejected command"):
+            link.command(400, 1, retry_temporary_s=2)
+    assert all(args[4] == 1 and args[5] == 0 for args in sent)  # arm, force override unset
+    assert len(sent) <= 3
+
+
 @pytest.fixture
 def plan(tmp_path):
     path = tmp_path / "calibration.plan"

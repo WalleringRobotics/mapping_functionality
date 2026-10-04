@@ -119,6 +119,7 @@ class Link:
         self.last_heartbeat = 0
         self.latest = {}
         self.reached = set()
+        self.command_attempts = []
 
     def poll(self, timeout=.2):
         now = time.monotonic()
@@ -144,12 +145,26 @@ class Link:
                 return msg
         raise TimeoutError("Timed out waiting for " + ", ".join(types))
 
-    def command(self, command, *params):
-        self.connection.mav.command_long_send(1, 1, command, 0,
-                                               *(list(params) + [0] * (7 - len(params))))
-        ack = self.wait({"COMMAND_ACK"}, predicate=lambda m: m.command == command)
-        if ack.result != self.m.MAV_RESULT_ACCEPTED:
-            raise ValueError(f"PX4 rejected command {command}: ACK {ack.result}")
+    def command(self, command, *params, retry_temporary_s=0):
+        deadline = time.monotonic() + retry_temporary_s
+        attempt = 0
+        while True:
+            self.connection.mav.command_long_send(1, 1, command, min(attempt, 255),
+                                                   *(list(params) + [0] * (7 - len(params))))
+            ack = self.wait({"COMMAND_ACK"}, predicate=lambda m: m.command == command)
+            self.command_attempts.append({"command": command, "attempt": attempt,
+                                          "params": list(params), "ack": ack.result})
+            if ack.result == self.m.MAV_RESULT_ACCEPTED:
+                return
+            if (ack.result != self.m.MAV_RESULT_TEMPORARILY_REJECTED
+                    or time.monotonic() >= deadline):
+                raise ValueError(f"PX4 rejected command {command}: ACK {ack.result}")
+            # Mission feasibility and health checks are asynchronous after upload/mode change.
+            # Keep normal checks active, log every refusal, and retry only temporary ACKs.
+            pause_until = min(deadline, time.monotonic() + 1)
+            while time.monotonic() < pause_until:
+                self.poll()
+            attempt += 1
 
     def send_item(self, item, mission_type, integer=True):
         p = [float("nan") if value is None else value for value in item["params"]]
@@ -267,7 +282,8 @@ def run(args):
             report["mission_roundtrip_verified"] = True
             report["fence_roundtrip_verified"] = True
             link.command(link.m.MAV_CMD_DO_SET_MODE, 1, 4, 4)  # PX4 AUTO/MISSION
-            link.command(link.m.MAV_CMD_COMPONENT_ARM_DISARM, 1)  # this isolated simulator only
+            link.command(link.m.MAV_CMD_COMPONENT_ARM_DISARM, 1,
+                         retry_temporary_s=60)  # normal checks, this isolated simulator only
             deadline = time.monotonic() + args.timeout
             took_off, abort_requested, hold_verified = False, False, False
             positions = []
@@ -311,6 +327,7 @@ def run(args):
         report["error"] = f"{type(error).__name__}: {error}"
     finally:
         if link is not None:
+            report["command_attempts"] = link.command_attempts
             link.connection.close()
         if process is not None and process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
