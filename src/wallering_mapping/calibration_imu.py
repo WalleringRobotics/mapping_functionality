@@ -18,34 +18,48 @@ from .rig_calibration import BODY, LEFT, OAK_IMU, xyzw_from_rotation
 
 OAK_TOPIC = "/oak/imu/data"
 PX4_TOPIC = "/mavros/imu/data_raw"
-SOLVER = "imu-imu-kabsch-v1"
+SOLVER = "imu-imu-kabsch-v2"
+
+
+class InsufficientMotion(ValueError):
+    """Motion cannot constrain a calibration; expected for static recordings."""
 
 
 def read_gyros(session):
     from .bags import reader, stamp
     rows = {OAK_TOPIC: [], PX4_TOPIC: []}
-    frames = {}
+    frames = {OAK_TOPIC: set(), PX4_TOPIC: set()}
     with reader(Path(session)) as bag:
         connections = [c for c in bag.connections if c.topic in rows]
         for connection, _, raw in bag.messages(connections=connections):
             message = bag.deserialize(raw, connection.msgtype)
-            frames[connection.topic] = message.header.frame_id
+            frames[connection.topic].add(message.header.frame_id)
             w = message.angular_velocity
             rows[connection.topic].append((stamp(message), w.x, w.y, w.z))
     for topic, frame in ((OAK_TOPIC, OAK_IMU), (PX4_TOPIC, BODY)):
         if not rows[topic]:
             raise ValueError(f"Session has no {topic} messages")
-        if frames[topic] != frame:
+        if frames[topic] != {frame}:
             raise ValueError(f"{topic} is in frame {frames[topic]!r}, expected {frame!r}")
     return tuple(series(rows[topic]) for topic in (OAK_TOPIC, PX4_TOPIC))
 
 
 def series(rows):
-    rows = sorted(rows)
     times = np.array([row[0] for row in rows], dtype=np.int64)
     if (np.diff(times) <= 0).any():
         raise ValueError("Gyro timestamps must be strictly increasing")
-    return times, np.array([row[1:] for row in rows], float)
+    return validate_series((times, np.array([row[1:] for row in rows], float)))
+
+
+def validate_series(samples):
+    times, rates = np.asarray(samples[0]), np.asarray(samples[1], float)
+    if times.ndim != 1 or len(times) < 2 or rates.shape != (len(times), 3):
+        raise ValueError("Gyro samples require at least two stamps and matching Nx3 rates")
+    if not np.issubdtype(times.dtype, np.integer) or not np.isfinite(rates).all():
+        raise ValueError("Gyro stamps must be integer nanoseconds and rates finite")
+    if (np.diff(times) <= 0).any():
+        raise ValueError("Gyro timestamps must be strictly increasing")
+    return times, rates
 
 
 def kabsch(source, target):
@@ -111,9 +125,12 @@ def solve_window(aligner, max_offset_ns, window=None, coarse_step_ns=2_000_000):
     if abs(best) >= max_offset_ns:
         raise ValueError("Best clock offset is at the search limit; widen max_offset_ms")
     # Refine on a 0.1 ms grid, then a parabola through the minimum.
-    fine = np.arange(best - coarse_step_ns, best + coarse_step_ns + 1, 100_000)
+    fine = np.arange(max(-max_offset_ns, best - coarse_step_ns),
+                     min(max_offset_ns, best + coarse_step_ns) + 1, 100_000)
     fine_costs = np.array([aligner.cost(int(o), window)[0] for o in fine])
     i = int(np.argmin(fine_costs))
+    if i in (0, len(fine) - 1):
+        raise ValueError("Best clock offset is at the search limit; widen max_offset_ms")
     offset = float(fine[i])
     if 0 < i < len(fine) - 1:
         a, b, c = fine_costs[i - 1:i + 2]
@@ -129,25 +146,39 @@ def solve_window(aligner, max_offset_ns, window=None, coarse_step_ns=2_000_000):
 
 
 def rotation_vector(rotation):
-    angle = math.acos(max(-1.0, min(1.0, (np.trace(rotation) - 1) / 2)))
-    axis = np.array([rotation[2, 1] - rotation[1, 2], rotation[0, 2] - rotation[2, 0],
-                     rotation[1, 0] - rotation[0, 1]])
-    return np.zeros(3) if angle < 1e-12 else axis * angle / (2 * math.sin(angle))
+    # Quaternion form remains well-conditioned for half-turn discrepancies.
+    q = np.asarray(xyzw_from_rotation(rotation))
+    norm = np.linalg.norm(q[:3])
+    return np.zeros(3) if norm < 1e-12 else q[:3] * (2 * math.atan2(norm, q[3]) / norm)
 
 
 def solve_gyros(oak, px4, *, max_offset_ms=200.0, segments=4, holdout_fraction=0.25,
                 min_excitation_rad_s=0.3, max_gap_ms=50.0, offset_floor_ns=100_000,
-                rotation_floor_rad=0.002):
+                rotation_floor_rad=0.002, max_residual_rad_s=0.1):
     """Solve offset and rotation from (times_ns, rates) arrays; see module docstring."""
+    options = [max_offset_ms, min_excitation_rad_s, max_gap_ms, offset_floor_ns,
+               rotation_floor_rad, max_residual_rad_s]
+    if not all(math.isfinite(v) and v > 0 for v in options) or max_offset_ms < 2:
+        raise ValueError("Solver limits must be positive and finite; max_offset_ms must be at least 2")
+    if not isinstance(segments, int) or segments < 2 or not 0 < holdout_fraction < 1:
+        raise ValueError("At least two segments and 0 < holdout_fraction < 1 are required")
+    oak, px4 = validate_series(oak), validate_series(px4)
+    for _, rates in (oak, px4):
+        if excitation(rates)["weakest_principal_rms_rad_s"] < min_excitation_rad_s:
+            raise InsufficientMotion("Insufficient rotation about every axis; record multi-axis motion")
     aligner = Aligner(oak, px4, int(max_gap_ms * 1e6))
     max_offset_ns = int(max_offset_ms * 1e6)
     full = solve_window(aligner, max_offset_ns)
     weakest = full["excitation"]["weakest_principal_rms_rad_s"]
     if weakest < min_excitation_rad_s:
-        raise ValueError(f"Insufficient rotation about every axis: weakest principal rate RMS "
+        raise InsufficientMotion(f"Insufficient rotation about every axis: weakest principal rate RMS "
                          f"{weakest:.3f} rad/s < {min_excitation_rad_s} rad/s")
     if full["reflection_residual_rad_s"] < 0.5 * full["residual_rad_s"]:
         raise ValueError("A reflection fits far better than a rotation: check the IMU axis/handedness conventions")
+
+    if full["residual_rad_s"] > max_residual_rad_s:
+        raise ValueError(f"Gyro residual {full['residual_rad_s']:.3f} rad/s exceeds "
+                         f"{max_residual_rad_s} rad/s; check units, filtering and rigid mounting")
 
     start, end = int(px4[0][0]), int(px4[0][-1])
     split = start + int((end - start) * (1 - holdout_fraction))
@@ -161,7 +192,7 @@ def solve_gyros(oak, px4, *, max_offset_ms=200.0, segments=4, holdout_fraction=0
         if result["excitation"]["weakest_principal_rms_rad_s"] >= min_excitation_rad_s:
             estimates.append(result)
     if len(estimates) < 2:
-        raise ValueError("Fewer than two well-excited segments; record longer multi-axis motion")
+        raise InsufficientMotion("Fewer than two well-excited segments; record longer multi-axis motion")
     offsets = np.array([e["offset_ns"] for e in estimates], float)
     vectors = np.array([rotation_vector(e["rotation"] @ full["rotation"].T) for e in estimates])
     # Standard error of the segment mean, with floors for what segments cannot show.
@@ -173,6 +204,8 @@ def solve_gyros(oak, px4, *, max_offset_ms=200.0, segments=4, holdout_fraction=0
     # result is the full-data fit.
     training = solve_window(aligner, max_offset_ns, (start, split))
     holdout = solve_window(aligner, max_offset_ns, (split, end + 1))
+    if holdout["excitation"]["weakest_principal_rms_rad_s"] < min_excitation_rad_s:
+        raise InsufficientMotion("Insufficient rotation in held-out final quarter")
     holdout_offset_error = holdout["offset_ns"] - training["offset_ns"]
     holdout_rotation_error = float(np.linalg.norm(rotation_vector(holdout["rotation"] @ training["rotation"].T)))
     # The difference of two independent estimates carries both errors: the holdout
