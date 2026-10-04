@@ -58,6 +58,8 @@ RUN /build/venv/bin/cmake -S colmap -B native -GNinja \
       -DCCACHE_ENABLED=OFF \
     && /build/venv/bin/cmake --build native -j"$BUILD_JOBS" \
     && /build/venv/bin/cmake --install native
+# auditwheel needs patchelf >= 0.14.5; jammy ships 0.14.3.
+RUN /build/venv/bin/python -m pip install --no-cache-dir 'patchelf==0.17.2.1'
 RUN CMAKE_PREFIX_PATH=/build/install CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
       /build/venv/bin/python -m pip wheel --no-cache-dir --no-build-isolation --no-deps \
       -Ccmake.define.Ceres_DIR=/build/install/lib/cmake/Ceres \
@@ -65,7 +67,7 @@ RUN CMAKE_PREFIX_PATH=/build/install CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
       -Ccmake.define.CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
       '-Ccmake.define.CMAKE_CXX_FLAGS_RELEASE=-O1 -DNDEBUG' \
       -Cbuild-dir=/build/python-native ./colmap -w wheel \
-    && LD_LIBRARY_PATH=/build/install/lib /build/venv/bin/auditwheel repair wheel/pycolmap-"$COLMAP_VERSION"-*.whl -w /out
+    && PATH=/build/venv/bin:$PATH LD_LIBRARY_PATH=/build/install/lib /build/venv/bin/auditwheel repair wheel/pycolmap-"$COLMAP_VERSION"-*.whl -w /out
 
 # Export only the repaired wheel, e.g. for a host venv on the workstation.
 FROM scratch AS pycolmap-wheel
