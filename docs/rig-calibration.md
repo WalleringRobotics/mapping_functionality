@@ -81,6 +81,46 @@ driver's `/tf_static` publishes `oak_imu_frame` only as an identity under a sepa
 `oak_oak` parent, so no recorded data relates the IMU to the cameras. Only the
 camera-to-IMU solver can supply that link.
 
+## Camera-to-IMU solver
+
+`wallering_mapping.calibration_camera.solve_camera_imu(session)` estimates
+`oak_imu_frame -> oak_left_camera_optical_frame` and the `oak_camera_exposure -> oak_imu`
+offset ([#10](https://github.com/WalleringRobotics/mapping_functionality/issues/10)) without
+a target. It returns a report whose `entries` drop into this file as `estimated`.
+
+Method: corners are tracked (pyramidal LK, forward-backward checked) over `stride` frames
+(default 3) on the global-shutter left mono stream; each pair's rotation comes from the
+essential matrix (USAC with local optimisation, on points undistorted with the session's
+factory intrinsics), or from a rotation-only fit when parallax is negligible. The gyro is
+integrated over the same intervals, bias-corrected (start value from still windows, then
+refined jointly with the rotation). The rotation is the Kabsch fit `r_imu = R r_camera` on
+rotation vectors; the time offset is scanned (default ±50 ms, 1 ms then 0.1 ms grid with a
+parabolic refinement) for the minimum residual. Sigmas come from a moving-block bootstrap
+over frame pairs, floored at 0.5 mrad and 0.1 ms for effects the bootstrap cannot see
+(intrinsics error, IMU sampling). The right camera is solved independently and mapped
+through the factory extrinsics as a cross-check (`cross_check`, with a 3-sigma flag).
+On synthetic data (20 fps, 100 Hz gyro with bias and noise, 0.4 px noise, 10 % outlier
+points) it recovers the rotation to ~0.01° and the offset to < 0.1 ms.
+
+Assumptions and limits:
+
+- Translation is not observable from rotation alone: `translation_m` is written as zero
+  with `translation_sigma_m` 0.03 m, a bound for an IMU inside the OAK housing (both lenses
+  are within a few centimetres of it).
+- The offset is relative (exposure stamp to IMU stamp on the OAK); absolute exposure
+  timing needs an optical event ([#14](https://github.com/WalleringRobotics/mapping_functionality/issues/14)).
+- Mono global-shutter cameras only; the RGB rolling-shutter readout is not modelled.
+  Factory intrinsics and distortion are trusted, not re-estimated.
+- It refuses, with a `ValueError`, recordings whose weakest rotation direction has an RMS
+  rate below 0.15 rad/s (static, single-axis or pure translation), cameras below 10 fps,
+  textureless scenes, fewer than 100 usable frame pairs, and an offset at the scan limit.
+
+What the calibration recording ([#8](https://github.com/WalleringRobotics/mapping_functionality/issues/8))
+should provide: mono left and right at 20 fps (≥ 10 fps) with `/oak/imu/data` at 100 Hz;
+a few seconds still at the start; then 30–60 s of hand-held rotation about all three axes
+(roughly ±20–30° at 0.5–1 Hz, with changes of speed so the offset is observable), in front
+of a textured, well-lit scene a few metres away; short exposure to avoid motion blur.
+
 ## Using the calibration
 
 `wr-map sync --rig-calibration FILE` applies the camera-to-body spatial transform
