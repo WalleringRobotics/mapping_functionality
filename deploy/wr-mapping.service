@@ -10,10 +10,10 @@ SupplementaryGroups=plugdev dialout
 WorkingDirectory=/opt/wallering/mapping_functionality
 EnvironmentFile=-/etc/wallering-mapping.env
 ExecStart=/bin/bash /opt/wallering/mapping_functionality/deploy/record-session.sh
-KillSignal=SIGTERM
-KillMode=mixed
-# Publisher/recorder termination is bounded by the supervisor; hashing a long
-# uncompressed bag can take much longer and must finish before power removal.
+KillSignal=SIGINT
+KillMode=control-group
+# ROS launch owns child shutdown. Hashing the stopped bag can take much longer
+# and must finish before power removal.
 TimeoutStopSec=infinity
 Restart=no
 UMask=0027

@@ -477,7 +477,7 @@ docker run --rm --network none --entrypoint /bin/bash \
   drone_autonomy_platform:orin -c '
     source /opt/ros/humble/setup.bash
     export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-    .venv/bin/python -m pytest -q tests/test_mavros_ros2.py
+    .venv/bin/python -m pytest -q tests/test_mavros_ros2.py tests/test_ros_recorder.py
   '
 ```
 

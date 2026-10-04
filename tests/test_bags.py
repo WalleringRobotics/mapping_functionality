@@ -10,7 +10,7 @@ from rosbags.rosbag2 import StoragePlugin, Writer
 from rosbags.typesys import Stores, get_typestore
 
 from wallering_mapping.association import associate
-from wallering_mapping.bags import CAMERAS, IMU, audit_bag, import_bag
+from wallering_mapping.bags import CAMERAS, IMU, audit_bag, connection_window, import_bag
 from wallering_mapping.dataset import jsonl, sha256_file
 from wallering_mapping.export import export
 from wallering_mapping.validate import validate
@@ -142,3 +142,38 @@ def test_clean_bag_with_truncated_camera_tail_is_not_capture_ready(tmp_path):
     assert not report['capture_ready']
     assert not report['coverage_complete']
     assert report['topics'][CAMERAS['right']]['last_receipt_gap_seconds'] == 2.5
+
+
+def test_shutdown_drain_is_outside_acquisition_coverage_window(tmp_path):
+    root = fixture_bag(tmp_path / 'recording', tail_cut=True)
+    (root / 'acquisition-start-ns.txt').write_text('1790000000000000000\n')
+    (root / 'acquisition-end-ns.txt').write_text('1790000002500000000\n')
+    seal(root)
+    report = audit_bag(root)
+    assert report['valid'], report['errors']
+    assert report['capture_ready']
+    assert report['topics'][CAMERAS['right']]['last_receipt_gap_seconds'] == 0
+
+
+def test_bag_ending_before_requested_window_does_not_shorten_coverage_check(tmp_path):
+    root = fixture_bag(tmp_path / 'recording')
+    (root / 'acquisition-start-ns.txt').write_text('1790000000000000000\n')
+    (root / 'acquisition-end-ns.txt').write_text('1790000004000000000\n')
+    seal(root)
+    report = audit_bag(root)
+    assert report['valid'], report['errors']
+    assert not report['capture_ready']
+    assert not report['coverage_complete']
+    assert report['coverage_window']['duration_seconds'] == 4
+
+
+@pytest.mark.parametrize('samples, expected', [
+    ([(0, False), (1, True), (3, True)], True),
+    ([(0, False), (3, True)], False),  # Disconnected state still held at interval start.
+    ([(1, True), (3, False), (4, True)], False),
+    ([(1, True), (3, True), (5, False)], True),
+])
+def test_px4_preroll_is_retained_but_connection_gate_covers_acquisition(samples, expected):
+    result = connection_window(samples, 2, 4)
+    assert result['connected_throughout_window'] is expected
+    assert result['disconnected_before_window'] == sum(t < 2 and not v for t, v in samples)

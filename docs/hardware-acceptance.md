@@ -4,14 +4,102 @@ See the [command guide](hardware-commands.md) for the complete reproducible comm
 set and passive serial diagnostics, and the
 [repository skill](../skills/jetson-mapping-checks/SKILL.md) for future agent sessions.
 
-**Update 2026-10-04:** BNO086 firmware is now 3.9.9. The former Python writer has
-been replaced in the default CLI/service by the official Luxonis ROS driver and
-standard rosbag2/MCAP. A two-minute OAK + PX4 recording passed integrity validation, but its mono
-streams end early and full-interval coverage is not yet qualified. Physical timing, missing GNSS/RTK evidence and rig calibration still
-prevent survey acceptance. TELEM2 remains 921600 baud, flow control off; OAK runtime
-USB is SUPER (5 Gbit/s).
+**Update 2026-10-04:** BNO086 firmware is now 3.9.9. The default stack uses the
+official Luxonis ROS driver, MAVROS and standard rosbag2/MCAP. The final bench
+recording passes integrity and requested-window coverage at 2 fps and a 100 Hz
+IMU request. Survey readiness still requires physical timing/rig calibration and
+missing GNSS/RTK evidence. OAK runtime USB is SUPER (5 Gbit/s); TELEM2 remains
+921600 baud with flow control off.
 
-## ROS2/MCAP commissioning: 2026-10-04
+## ROS launch ownership verified: 2026-10-04
+
+`deploy/record.launch.py` now owns the official OAK driver, optional MAVROS and
+standard `ros2 bag record`. Launch events handle exits and shutdown; the shell
+has no PID polling or signal escalation. A launch timer retains two seconds of
+post-roll for timed recordings. `seal-rosbag.sh` runs after launch returns.
+Docker init and the service deliver SIGINT to the foreground group; finalization
+can finish before container/service teardown.
+
+The new full-stack run requested 60 seconds and measured **60.005 seconds** in
+the acquisition interval. The complete bag, including startup/pre/post-roll,
+contains **175 RGB, 174 left and 174 right images** at approximately 2 Hz and
+**8,700 OAK IMU messages at 99.77 Hz**. No interior image timestamp gaps occurred;
+all three camera streams cover both interval boundaries. OAK, MAVROS and rosbag2
+exited cleanly. The external audit reports `valid=true`, `capture_ready=true`,
+`coverage_complete=true`, `survey_ready=false`.
+
+PX4 was connected at interval start and throughout acquisition. One disconnected
+startup state remains in the pre-roll and is reported separately. Timing reached
+805 consecutive good samples, with 305 of 911 samples qualified by the unchanged
+501-sample gate. This does not qualify the entire interval or physical exposure
+timing. The missing GNSS/RTK topics and calibration limitations still apply.
+
+A second, unbounded camera-only run was stopped with normal `docker stop` after
+17.210 seconds of acquisition. ROS launch and rosbag2 again exited cleanly; the
+sealed bag passed integrity and coverage checks. Its worst image tail gap was
+0.451 seconds. Manual stops have no guaranteed post-roll, so this result is not a
+replacement for checking each interrupted recording.
+
+Evidence remains under ignored `runs/rosbag-commission-20261004-001/launch-001`
+and `launch-stop-001`, with external audits (`launch-001-audit-v2.json` is current).
+The first audit retained the old all-bag PX4 connection gate and rejected the
+expected disconnected startup sample; the current audit uses the sealed interval
+and retains pre/post-roll state counts. Coverage also refuses to shorten the
+requested interval when a bag ends early.
+
+Verification: **140 portable tests passed**, with processing tests still awaiting
+the PyCOLMAP source build and two ROS modules skipped on the host. In the ROS
+container, **six integration tests passed**, including timed completion, Ctrl+C,
+driver/recorder failures, failed readiness and MAVROS DDS/parameter/CDR behavior.
+Ruff, shell syntax and whitespace checks passed. Both hardware sessions released
+their devices; no recording service was installed or enabled.
+
+## Recording-window investigation before ROS launch: 2026-10-04
+
+Checkpoint `549d23d` introduced the ROS stack. An independent mono-only rosbag2
+recorder then received two late left-camera frames absent from the main recorder.
+The first comparison run is retained as failed because editing its executing
+shell script caused a shutdown syntax error; subsequent trials used frozen copies.
+The then-tested shell implementation retained pre-roll with rosbag already running,
+started the requested interval after warmup, kept two seconds of post-roll, stopped
+owned publishers, let queued messages drain, then closed rosbag. It has since been
+replaced by standard ROS launch process ownership. Host realtime interval bounds are sealed;
+they do not establish physical shutter timing.
+
+The final 60-second request measured a **60.362-second acquisition interval** inside
+a 65.568-second bag. It saved **131 RGB, 131 left and 131 right images**, including
+pre/post-roll, at 2.000 Hz, plus **6,536 OAK IMU messages at 99.79 Hz**. All image
+headers are monotonic with no interior interval over 1.5 frame periods. Both ends
+of the acquisition interval are covered. An independent rosbag2 instance captured
+121 frames from each mono camera within that interval, and **every one of those
+ROS header timestamps is present in the main bag**. Original hardware sequence
+continuity remains unknown; these are ROS message comparisons.
+
+The audit reports `valid=true`, `capture_ready=true`, `coverage_complete=true`,
+`survey_ready=false`. Fresh PX4 timing reached 640 consecutive good observations;
+140 of 651 samples passed the unchanged 501-sample qualification gate. That covers
+the later part of this short run, not its entire interval. RTT median/p95/max were
+2.835/4.035/12.716 ms and offset-residual median/p95/max were 0.269/0.631/2.076 ms.
+Configured fused GNSS and `gpsstatus` raw/RTK topics remain absent. IMU intervals
+are irregular (maximum 31.978 ms); no lossless hardware-sample claim is made.
+
+Evidence: ignored `runs/rosbag-commission-20261004-001/window-001`, its external
+audit, `mono-reference-003` and `mono-comparison-003.json`. Earlier partial-coverage
+bags remain preserved. Actual offline processing imported all 707 images from the
+first two-minute bag and prepared 120 selected RGB images for the building workflow.
+No reconstruction or accuracy claim is made from stationary bench images.
+
+Verification: 137 portable tests passed and one ROS-only test module skipped;
+`test_processing.py` was excluded because the pinned ARM64 `pycolmap` dependency
+was not yet installed. The then-current supervisor tests covered SIGINT/SIGTERM, publisher-before-
+recorder shutdown, sealed completion and acquisition-window handling. Ruff, shell
+syntax checks and the actual recording/import/preparation paths passed. All owned
+recording containers exited, releasing the camera and UART.
+
+Next: field-duration soak under intended workloads, physical timing/mounting
+calibration, and the missing GNSS/RTK integration. Retain the existing timing gates.
+
+## Initial ROS2/MCAP commissioning: 2026-10-04
 
 See [the reproducible recording procedure](rosbag-recording.md). Runtime: Humble,
 `depthai_ros_driver` 2.12.2 / C++ DepthAI 2.31.1, MAVROS 2.14.0 and rosbag2/MCAP
@@ -72,11 +160,9 @@ the imported dataset carries that same coverage result. Standard rosbag2 replaye
 the recorded IMU in an isolated network/domain. At 10× playback it reported queue
 starvation delays; this confirms readability, not real-time replay performance.
 
-Next qualification: isolate the truncated mono tail with a quiet repeat and
-independent ROS publisher-versus-recorder counts, then a field-duration soak.
-Continue PX4 timing/link-load
-investigation without relaxed gates, the missing GNSS/RTK plugins/topics, and
-physical timing/mounting calibration. Static bench images are not a reconstruction
+The verified follow-up above addresses the recording-window issue. A field-duration
+soak, loaded PX4 timing, missing GNSS/RTK plugins/topics and physical mounting/timing
+qualification remain separate tasks. Static bench images are not a reconstruction
 or survey-accuracy test.
 
 ## 100 Hz IMU trial: 2026-10-04

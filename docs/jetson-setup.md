@@ -90,9 +90,12 @@ sudo systemctl stop wr-mapping
 ```
 
 The launcher uses the same ROS preflight/recorder as the CLI, requires the storage
-mount and creates a unique session. `KillMode=mixed` lets its supervisor drain the
-recorder before stopping publishers. The supervisor bounds worker shutdown; the
-unit permits subsequent checksum sealing to finish even for long recordings.
+mount and creates a unique session. `KillMode=control-group` and `KillSignal=SIGINT`
+deliver stop to the foreground ROS launch job. ROS launch handles child shutdown
+and rosbag2 flushes its own cache. The shell then seals the stopped files; the unit
+permits this checksum step to finish even for long recordings. Timed recordings
+include two seconds of post-roll; a manual/service stop is immediate and its
+end coverage must be checked by validation.
 Wait for `state=complete` before removing power; sealing large bags takes time.
 Automatic restart is disabled. Check final state and validation before removing
 power. The interactive Docker fallback requires daemon access; the supplied service

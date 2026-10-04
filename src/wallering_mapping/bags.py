@@ -54,6 +54,8 @@ def check_seal(root):
         checked.add(Path(relative).as_posix())
     required = {p.relative_to(root).as_posix() for p in (root / "bag").glob("*.mcap")}
     required |= {"bag/metadata.yaml", "oak-requested.yaml", "oak-parameters.yaml", "mcap.yaml", "topics.txt"}
+    if any((root / name).exists() for name in ("acquisition-start-ns.txt", "acquisition-end-ns.txt")):
+        required |= {"acquisition-start-ns.txt", "acquisition-end-ns.txt"}
     if "/mavros/state" in (root / "topics.txt").read_text().splitlines():
         required.add("mavros-time.yaml")
     if not required <= checked:
@@ -93,6 +95,19 @@ def requested_parameters(root):
     from ruamel.yaml import YAML
     value = YAML(typ="safe").load((root / "oak-requested.yaml").read_text())
     return value["/oak"]["ros__parameters"]
+
+
+def connection_window(samples, start, end):
+    """Evaluate connection during acquisition, retaining pre/post-roll evidence."""
+    before = [connected for receipt, connected in samples if receipt < start]
+    within = [connected for receipt, connected in samples if start <= receipt <= end]
+    after = [connected for receipt, connected in samples if receipt > end]
+    states = before[-1:] + within
+    return {"connected_at_start": before[-1] if before else None,
+            "disconnected_before_window": before.count(False),
+            "disconnected_in_window": within.count(False),
+            "disconnected_after_window": after.count(False),
+            "connected_throughout_window": bool(states) and all(states)}
 
 
 def audit_bag(root):
@@ -153,7 +168,7 @@ def audit_bag(root):
                                        (message.linear_acceleration, message.angular_velocity)
                                        for axis in "xyz"])
                 if topic == "/mavros/state":
-                    connected.append(bool(message.connected))
+                    connected.append((receipt, bool(message.connected)))
                 if topic == "/mavros/timesync_status":
                     sync_rows.append(plain(message))
                 if topic in {"/mavros/global_position/global", "/mavros/global_position/raw/fix"}:
@@ -191,10 +206,21 @@ def audit_bag(root):
         if all_receipts:
             start, end = min(all_receipts), max(all_receipts)
             report["receipt_duration_seconds"] = (end - start) / 1e9
+            if (root / "acquisition-start-ns.txt").is_file():
+                requested_start = int((root / "acquisition-start-ns.txt").read_text())
+                requested_end = int((root / "acquisition-end-ns.txt").read_text())
+                if requested_start >= requested_end:
+                    raise ValueError("Invalid acquisition time window")
+                if max(start, requested_start) >= min(end, requested_end):
+                    raise ValueError("Acquisition window does not overlap the bag")
+                start, end = requested_start, requested_end
+                report["coverage_window"] = {"start_ns": start, "end_ns": end,
+                    "duration_seconds": (end - start) / 1e9,
+                    "source": "Acquisition host realtime; excludes pre/post-roll, not physical exposure timing"}
             for topic, times in received.items():
                 report["topics"][topic].update(
-                    first_receipt_delay_seconds=(times[0] - start) / 1e9,
-                    last_receipt_gap_seconds=(end - times[-1]) / 1e9)
+                    first_receipt_delay_seconds=max(0, times[0] - start) / 1e9,
+                    last_receipt_gap_seconds=max(0, end - times[-1]) / 1e9)
                 if topic in CAMERAS.values():
                     expected = report["topics"][topic]["requested_hz"]
                     if max(times[0] - start, end - times[-1]) > 3e9 / expected:
@@ -210,8 +236,10 @@ def audit_bag(root):
                 report["errors"].append(f"Image/CameraInfo mismatch: {topic}")
         if not np.isfinite(imu_values).all():
             report["errors"].append("Nonfinite IMU values")
-        if connected and not all(connected):
-            report["errors"].append("PX4 disconnected during recording")
+        if connected:
+            report["px4_connection"] = connection_window(connected, start, end)
+            if not report["px4_connection"]["connected_throughout_window"]:
+                report["errors"].append("PX4 disconnected during acquisition window")
         report["gnss"] = {topic: {"samples": len(values), "valid_fixes": sum(v >= 0 for v in values)}
                           for topic, values in gnss.items()}
         report["missing_optional_topics"] = [t for t in topics if not observed[t] and t not in required]

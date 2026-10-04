@@ -20,11 +20,12 @@ if [[ -n "${WR_MAPPING_SERIAL_DEVICE:-}" ]]; then
   ros_devices+=(--device "$WR_MAPPING_SERIAL_DEVICE:/dev/ttyUSB0"
     --group-add "$(stat -Lc %g "$WR_MAPPING_SERIAL_DEVICE")")
 fi
-exec docker run --rm --init --network host --ipc host --stop-signal SIGINT \
+exec docker run --rm --init --network host --ipc host --stop-signal SIGINT --stop-timeout -1 \
   --entrypoint /bin/bash --device-cgroup-rule='c 189:* rmw' \
   --mount type=bind,src=/dev/bus/usb,dst=/dev/bus/usb \
   --mount "type=bind,src=$ros_repo,dst=$ros_repo" --workdir "$ros_repo" \
   --env "ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}" --env PYTHONNOUSERSITE=1 \
+  --env TINI_KILL_PROCESS_GROUP=1 \
   "${ros_devices[@]}" "${ros_mounts[@]}" "${WR_PLATFORM_IMAGE:-drone_autonomy_platform:orin}" -c '
     set -eo pipefail
     source /opt/ros/humble/setup.bash

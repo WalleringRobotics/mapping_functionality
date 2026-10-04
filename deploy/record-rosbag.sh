@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Supervises vendor nodes and rosbag2. ROS messages are written only by rosbag2.
+# Prepare a session, run ROS launch in the foreground, then seal the stopped bag.
 set -euo pipefail
 bag_repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 bag_output=""
@@ -47,131 +47,40 @@ cp "$bag_config" "$bag_output/oak-requested.yaml"
 cp "$bag_repo/configs/rosbag-mcap.yaml" "$bag_output/mcap.yaml"
 cp "$bag_repo/deploy/record-rosbag.sh" "$bag_output/recorder-script.sh"
 cp "$bag_repo/deploy/run-ros.sh" "$bag_output/runtime-wrapper.sh"
+cp "$bag_repo/deploy/record.launch.py" "$bag_output/record.launch.py"
+cp "$bag_repo/deploy/record-rosbag-checks.sh" "$bag_output/readiness-script.sh"
+cp "$bag_repo/deploy/seal-rosbag.sh" "$bag_output/seal-script.sh"
 printf '%s\n' starting > "$bag_output/state"
 date -u --iso-8601=ns > "$bag_output/started-utc.txt"
 dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' 'ros-humble-depthai*' 'ros-humble-rosbag2*' 'ros-humble-mavros*' > "$bag_output/packages.txt" 2>/dev/null || true
 git -C "$bag_repo" rev-parse HEAD > "$bag_output/git-commit.txt"
 git -C "$bag_repo" diff --stat > "$bag_output/git-diff-stat.txt"
-bag_pids=()
-bag_recorder=""
-bag_stopped=false
-bag_failed=false
-bag_cleanup() {
-  local original=$?
-  trap - EXIT INT TERM
-  if [[ -n "$bag_recorder" ]] && kill -0 "$bag_recorder" 2>/dev/null; then
-    kill -INT -- "-$bag_recorder" 2>/dev/null || true
-    # Finalize chunks/indexes before stopping publishers.
-    for ((i=0; i<150; i++)); do
-      kill -0 "$bag_recorder" 2>/dev/null || break
-      sleep .2
-    done
-    if kill -0 "$bag_recorder" 2>/dev/null; then
-      kill -TERM -- "-$bag_recorder" 2>/dev/null || true
-      bag_failed=true
-    fi
-    for ((i=0; i<25; i++)); do
-      kill -0 "$bag_recorder" 2>/dev/null || break
-      sleep .2
-    done
-    kill -KILL -- "-$bag_recorder" 2>/dev/null || true
-  fi
-  if [[ -n "$bag_recorder" ]]; then wait "$bag_recorder" || bag_failed=true; fi
-  for pid in "${bag_pids[@]}"; do kill -INT -- "-$pid" 2>/dev/null || true; done
-  for ((i=0; i<50; i++)); do
-    local alive=false
-    for pid in "${bag_pids[@]}"; do kill -0 "$pid" 2>/dev/null && alive=true; done
-    [[ "$alive" == false ]] && break
-    sleep .2
-  done
-  for pid in "${bag_pids[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then kill -TERM -- "-$pid" 2>/dev/null || true; fi
-  done
-  sleep 1
-  for pid in "${bag_pids[@]}"; do
-    kill -KILL -- "-$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  done
-  date -u --iso-8601=ns > "$bag_output/finished-utc.txt"
-  printf '%s\n' finalizing > "$bag_output/state"
-  if (( original == 0 )) && [[ "$bag_failed" == false && -f "$bag_output/bag/metadata.yaml" ]]; then
-    ros2 bag info "$bag_output/bag" > "$bag_output/bag-info.txt" || bag_failed=true
-    if [[ "$bag_failed" == false ]]; then
-      if (cd "$bag_output" && find . -type f ! -name state ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS); then
-        printf '%s\n' complete > "$bag_output/state"
-        echo "Recording complete: $bag_output"
-      else
-        bag_failed=true
-      fi
-    fi
-  else
-    bag_failed=true
-  fi
-  if [[ "$bag_failed" == true ]]; then
-    printf '%s\n' failed > "$bag_output/state"
-    echo "Recording failed; preserved at $bag_output" >&2
-    original=2
-  fi
-  exit "$original"
-}
-trap bag_cleanup EXIT
-trap 'bag_stopped=true' INT TERM
+trap 'printf "%s\n" failed > "$bag_output/state"' EXIT
 # Refuse duplicate owners. A failed graph query is also a failed preflight.
 timeout 15 ros2 node list --no-daemon > "$bag_output/nodes-before.txt"
 if grep -qx /oak "$bag_output/nodes-before.txt"; then echo "OAK driver is already running" >&2; exit 2; fi
 if [[ "$bag_start_mavros" == true ]]; then
   if grep -q '^/mavros' "$bag_output/nodes-before.txt"; then echo "Reuse the existing MAVROS owner" >&2; exit 2; fi
-  setsid ros2 launch mavros px4.launch "fcu_url:=$bag_fcu_url" > "$bag_output/mavros.log" 2>&1 &
-  bag_pids+=("$!")
 fi
-bag_device_args=()
-[[ -z "$bag_device" ]] || bag_device_args=(-p "camera.i_mx_id:=$bag_device")
-setsid ros2 run depthai_ros_driver camera_node --ros-args -r __node:=oak \
-  --params-file "$bag_config" "${bag_device_args[@]}" > "$bag_output/oak.log" 2>&1 &
-bag_pids+=("$!")
 bag_topics=(/oak/rgb/image_raw /oak/rgb/camera_info /oak/left/image_raw /oak/left/camera_info
   /oak/right/image_raw /oak/right/camera_info /oak/imu/data /tf_static /diagnostics)
-for topic in /oak/rgb/camera_info /oak/left/camera_info /oak/right/camera_info /oak/imu/data; do
-  bag_type=sensor_msgs/msg/CameraInfo
-  [[ "$topic" != /oak/imu/data ]] || bag_type=sensor_msgs/msg/Imu
-  timeout 30 ros2 topic echo "$topic" "$bag_type" --once > "$bag_output/$(echo "$topic" | tr / _)-first.yaml"
-done
-timeout 15 ros2 param dump /oak > "$bag_output/oak-parameters.yaml"
 if [[ "$bag_camera_only" == false ]]; then
-  timeout 30 ros2 topic echo /mavros/state mavros_msgs/msg/State --once --filter 'm.connected' > "$bag_output/mavros-state.yaml"
-  grep -q 'connected: true' "$bag_output/mavros-state.yaml" || { echo "PX4 is not connected" >&2; exit 2; }
-  timeout 15 ros2 param dump /mavros/time > "$bag_output/mavros-time.yaml"
   bag_topics+=(/mavros/state /mavros/imu/data_raw /mavros/imu/data /mavros/local_position/pose
     /mavros/global_position/global /mavros/global_position/raw/fix /mavros/timesync_status
     /mavros/time_reference /mavros/gpsstatus/gps1/raw /mavros/gpsstatus/gps1/rtk /uas1/mavlink_source)
 fi
 printf '%s\n' "${bag_topics[@]}" > "$bag_output/topics.txt"
-timeout 15 ros2 topic list -t --no-daemon > "$bag_output/graph.txt"
-# Preserve the vendor calibration dump without exposing identity in source files.
-for calibration in /tmp/*_calibration.json; do
-  if [[ -f "$calibration" && "$calibration" -nt "$bag_output/started-utc.txt" ]]; then
-    cp "$calibration" "$bag_output/"
-  fi
-done
-echo "Warming up for $bag_warmup seconds; recording $bag_duration seconds to $bag_output"
-for ((i=0; i<bag_warmup; i++)); do
-  [[ "$bag_stopped" == false ]] || exit 2
-  for pid in "${bag_pids[@]}"; do kill -0 "$pid" || exit 2; done
-  sleep 1 || [[ "$bag_stopped" == true ]]
-done
-[[ "$bag_stopped" == false ]] || exit 2
-setsid ros2 bag record -s mcap --max-cache-size 104857600 --max-bag-size 1073741824 \
-  --storage-config-file "$bag_output/mcap.yaml" -o "$bag_output/bag" \
-  "${bag_topics[@]}" > "$bag_output/recorder.log" 2>&1 &
-bag_recorder=$!
-printf '%s\n' recording > "$bag_output/state"
-for ((i=0; bag_duration == 0 || i<bag_duration; i++)); do
-  [[ "$bag_stopped" == false ]] || break
-  kill -0 "$bag_recorder" || exit 2
-  for pid in "${bag_pids[@]}"; do kill -0 "$pid" || exit 2; done
-  if (( i % 5 == 0 )); then
-    (( $(bag_free) > bag_min_free )) || { echo "Disk reserve reached" >&2; exit 2; }
-    echo "Recording $i/$bag_duration seconds"
-  fi
-  sleep 1 || [[ "$bag_stopped" == true ]]
-done
+# ROS launch handles child signals and escalation. Terminal Ctrl+C, Docker's
+# init process and systemd deliver signals to this foreground process group.
+# Keep this shell alive long enough to seal files after launch has returned.
+trap ':' INT TERM
+export ROS_LOG_DIR="$bag_output/ros-log"
+bag_result=0
+bag_device_args=()
+[[ -z "$bag_device" ]] || bag_device_args=("device_id:=$bag_device")
+ros2 launch "$bag_output/record.launch.py" \
+  "output:=$bag_output" "duration:=$bag_duration" "warmup:=$bag_warmup" \
+  "camera_only:=$bag_camera_only" "start_mavros:=$bag_start_mavros" \
+  "fcu_url:=$bag_fcu_url" "${bag_device_args[@]}" || bag_result=$?
+trap - EXIT INT TERM
+bash "$bag_output/seal-script.sh" "$bag_output" "$bag_result"

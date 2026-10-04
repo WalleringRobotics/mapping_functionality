@@ -1,9 +1,11 @@
 # ROS2 recording and offline processing
 
 The acquisition stack is the official Luxonis `depthai_ros_driver`, MAVROS and
-`ros2 bag record` with the MCAP storage plugin. The repository's shell supervisor
-owns startup, preflight and shutdown; it does not receive or serialize sensor
-messages. Python is used only for CLI dispatch and offline checks/import.
+`ros2 bag record` with the MCAP storage plugin. [ROS launch](../deploy/record.launch.py)
+owns the driver and recorder processes, their exits and shutdown timeouts. The shell
+prepares the session, runs launch in the foreground, then seals the stopped files.
+The Python launch description configures standard ROS processes; it does not
+subscribe to or write sensor messages.
 
 The commissioned runtime is ROS Humble on ARM64, driver 2.12.2 with DepthAI C++
 2.31.1, MAVROS 2.14.0 and rosbag2/MCAP 0.15.14. The existing
@@ -32,13 +34,13 @@ export WR_MAPPING_SERIAL_DEVICE=/dev/serial/by-id/your-adapter
 ```
 
 `capture` and `record` invoke the same standard recorder. `--duration 0` records
-until SIGINT/SIGTERM. `--device-id` selects a specific OAK. Native ROS uses the
+until terminal Ctrl+C, `docker stop`, or `systemctl stop`. `--device-id` selects a specific OAK. Native ROS uses the
 supplied FCU URL directly; the Docker wrapper maps `WR_MAPPING_SERIAL_DEVICE` to
 `/dev/ttyUSB0`. It does not change PX4 baud, stream rates or other parameters.
 Container recordings outside the checkout require `WR_MAPPING_ROOT` set to the
 existing output parent. Use `WR_MAPPING_MOUNT` plus `--require-mount` for a required
-storage mount. The service uses these checks by default. Containers currently
-write as their image user (root); preserve or adjust ownership when transferring.
+storage mount. The service uses these checks by default. Container file ownership follows the image/runtime user mapping; preserve
+appropriate ownership when transferring.
 
 The default [driver profile](../configs/oakd-ros.yaml) requests RGB 4056×3040 and
 left/right 1280×800 at 2 fps, fixed exposure, RGB focus and white balance, with
@@ -55,13 +57,26 @@ cache (rosbag2 double-buffers it), approximately 1 GiB file splits and a 5 GiB
 free-space reserve. At these dimensions, expect approximately 78 MB/s, 4.4 GiB/min
 and 260 GiB/hour. Benchmark the actual disk and budget the run length accordingly.
 
-The supervisor checks camera-info/IMU arrival and PX4 connection before capture,
+One-shot startup checks verify camera-info/IMU arrival and PX4 connection,
 saves effective parameters, and refuses a second `/oak` or MAVROS owner. An owner
 using a different node name/domain still needs to be stopped manually. It checks
-owned process health and disk reserve during capture. Offline validation detects
+process exits through ROS launch events and disk reserve through a launch timer. Offline validation detects
 required-stream stalls; process health alone does not establish stream health.
-SIGINT drains rosbag before publishers stop. Failed/preflight runs are retained;
-`state=complete` means clean finalization, not survey acceptance.
+Warmup runs with rosbag already recording, retaining pre-roll for discovery.
+The requested capture interval starts afterward. At its timed end a launch timer
+retains two seconds of post-roll, then emits the standard launch shutdown event.
+ROS launch signals its processes and rosbag2 flushes its own cache and finalizes
+MCAP. There is no shell PID polling, process-group termination loop or custom
+signal escalation. The recorder gets 30 seconds to exit before launch escalates.
+Unowned MAVROS remains running. A manual interruption shuts down immediately;
+it has no guaranteed post-roll, so inspect its coverage audit.
+`acquisition-start-ns.txt` / `acquisition-end-ns.txt` seal the host realtime
+interval; coverage checks exclude pre-roll and shutdown drain. These times are
+not calibrated physical exposure timestamps. Failed/preflight runs are retained;
+`state=complete` means clean finalization, not survey acceptance. Checksums and
+`ros2 bag info` run only after launch returns; content validation is the separate
+offline command below. The container init and systemd deliver stop signals to the
+foreground group. The shell merely survives that signal to finish sealing.
 
 ## Inspect and replay
 
@@ -79,7 +94,9 @@ MAVROS time parameters, vendor calibration, topic inventory, versions, logs and
 CDR, compares counts with metadata, validates image geometry and calibration,
 checks timestamps/rates, required streams, start/end coverage and PX4 connection, and reports the
 existing 501-sample/10 ms RTT/2 ms offset-residual timing gate. Missing optional
-GNSS/RTK topics are explicit. `valid` means storage/content validation passed;
+GNSS/RTK topics are explicit. PX4 connection is checked throughout the sealed
+acquisition interval, including the last state known at its start; disconnected
+pre/post-roll samples remain counted in the report. `valid` means storage/content validation passed;
 `capture_ready` also requires image coverage at both bag boundaries. An early
 stream stop can leave a readable bag that fails full-interval coverage. Reports go outside the immutable source session.
 

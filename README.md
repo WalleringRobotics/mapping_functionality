@@ -8,9 +8,9 @@ measurements and timing evidence remain available for future camera and algorith
 
 **Status:** OAK BNO086 firmware has been upgraded to 3.9.9. Acquisition now uses
 the official Luxonis ROS driver, MAVROS and **rosbag2 with MCAP**. A physical bench
-recording at 2 fps with a 100 Hz IMU request completed and is readable. Truncated
-mono-stream coverage, PX4 timing, GNSS/RTK and physical rig calibration still need
-qualification; see the
+recording passed integrity and requested-window coverage at 2 fps with a 100 Hz
+IMU request (99.79 Hz observed). Field-duration stability, GNSS/RTK and physical
+timing/rig calibration still need qualification; see the
 [measured results](docs/hardware-acceptance.md).
 
 ## Mode 1 — onboard ROS2 recording
@@ -29,8 +29,8 @@ wr-map validate runs/bench-001 --report runs/bench-001-audit.json
 ```
 
 `capture` / `record` launches vendor ROS nodes and standard `ros2 bag record`.
-The checked-in shell supervisor handles preflight and orderly shutdown; there is
-no custom Python recorder in this path. The default stores full-resolution raw
+ROS launch owns driver/recorder startup and shutdown; the shell prepares the
+session and seals it afterward. The default stores full-resolution raw
 RGB and two mono streams at 2 fps plus IMU/PX4, calibration and timing messages.
 A new directory is required; `--duration 0` runs until Ctrl+C. For camera-only
 commissioning use `--camera-only`. Storage demand is about 4.4 GiB/minute.
