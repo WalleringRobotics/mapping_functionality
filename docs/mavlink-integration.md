@@ -1,5 +1,9 @@
 # PX4/MAVROS integration and timing review
 
+Current acquisition uses [ROS2/MCAP recording](rosbag-recording.md). Direct-SDK
+capture examples below are retained as legacy diagnostic procedures; they do not
+run or qualify the current ROS recording stack.
+
 This change is stacked on the capture/postprocessing foundation. It uses the
 existing MAVROS companion link from `drone_autonomy_platform`; that process owns
 TELEM2/UART and MAVLink TIMESYNC. The mapping recorder subscribes through ROS 2.
@@ -102,7 +106,7 @@ and MAVROS packages through its existing deployment, then create a venv which ca
 see those packages. Match `ROS_DOMAIN_ID` and DDS configuration to MAVROS.
 
 ```bash
-git switch feat/mavlink-mapping-integration
+git switch main
 source /opt/ros/humble/setup.bash
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
@@ -120,15 +124,15 @@ one camera owner and one UART/MAVLink owner. This adapter does not consume
 exposure and device metadata. Running the two camera owners together will fail.
 
 Copy `configs/mavros-survey.json` to a private deployment config. Set `time_node`
-to the actual time-plugin node from `ros2 node list`; `/mavros/uas_1/time` is an
-example, not a discovered deployment name. Set every topic to the actual absolute
+to the actual time-plugin node from `ros2 node list`; `/mavros/time` was verified
+in the existing platform's MAVROS 2.14.0 image. Set every topic to the actual absolute
 name. The platform's examples and upstream MAVROS namespaces are not uniform.
 Inspect the actual node before capture, substituting its name below:
 
 ```bash
-ros2 param get /mavros/uas_1/time timesync_mode
-ros2 param get /mavros/uas_1/time convergence_window
-ros2 param get /mavros/uas_1/time max_rtt_sample
+ros2 param get /mavros/time timesync_mode
+ros2 param get /mavros/time convergence_window
+ros2 param get /mavros/time max_rtt_sample
 ros2 topic echo /mavros/state --once
 ros2 topic hz /mavros/timesync_status
 ros2 topic hz /mavros/local_position/pose
@@ -150,7 +154,7 @@ after it. Copy/tune the camera profile for the actual early OAK-D and check
 `wr-map inspect`; the exact Kickstarter board IMU has not been hardware-probed.
 
 ```bash
-wr-map capture --config configs/oakd-mavros-survey.json \
+wr-map legacy-capture --config configs/oakd-mavros-survey.json \
   --telemetry-config configs/mavros-survey.json \
   --output /mnt/nvme/mapping/px4-bench-001 --duration 60
 wr-map status /mnt/nvme/mapping/px4-bench-001
@@ -173,8 +177,12 @@ centres: camera mounting, lever arm and coordinate transform must first be measu
 GNSS covariance, fix status and height reference remain available for that work.
 
 For unattended capture, customize the foundation service to source the same ROS
-and platform overlay and pass `--telemetry-config`. Its existing standalone launcher
-does not initialize ROS automatically. Keep startup dependent on the established
+and platform overlay and pass `--telemetry-config`. The launcher accepts these through
+`WR_MAPPING_ROS_SETUP`, `WR_MAPPING_ROS_OVERLAY`, and `WR_MAPPING_TELEMETRY_CONFIG`
+in `/etc/wallering-mapping.env`, and runs a receive-only startup probe first.
+See [hardware checks](hardware-acceptance.md) to reuse the local platform container
+and review the IMU firmware, loaded timing, GNSS delivery and missing RTK-plugin findings.
+Keep startup dependent on the established
 MAVROS service, retain unique session names and test service shutdown on the bench.
 
 ## Physical timing acceptance

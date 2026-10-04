@@ -6,61 +6,50 @@ The processing mode supports **building/object geometry** with COLMAP and
 **terrain maps** with OpenDroneMap. Original photographs, calibration, inertial
 measurements and timing evidence remain available for future camera and algorithm upgrades.
 
-**Status:** software implemented and tested without attached camera hardware.
-DepthAI 3.10.0, COLMAP 3.12.x and ODM 3.6.2 are the supported baselines. Hardware
-throughput and real-survey accuracy require [commissioning](docs/jetson-setup.md#commissioning).
-Automated tests exercise storage, geometry conversion, real COLMAP model IO and
-controlled engine orchestration; they do not establish field accuracy or a successful
-full external-engine reconstruction on this development machine.
+**Status:** OAK BNO086 firmware has been upgraded to 3.9.9. Acquisition now uses
+the official Luxonis ROS driver, MAVROS and **rosbag2 with MCAP**. A physical bench
+recording passed integrity and requested-window coverage at 2 fps with a 100 Hz
+IMU request (99.79 Hz observed). Field-duration stability, GNSS/RTK and physical
+timing/rig calibration still need qualification; see the
+[measured results](docs/hardware-acceptance.md).
 
-## Mode 1 — onboard capture
+## Mode 1 — onboard ROS2 recording
 
-Follow [Jetson setup](docs/jetson-setup.md) for USB permissions, NVMe and service deployment.
+See [the recording guide](docs/rosbag-recording.md) for the commissioned ROS Humble
+runtime, USB/UART ownership, service setup and timestamp limitations.
 
 ```bash
-git clone --branch feat/rtk-accuracy-reporting \
-  https://github.com/WalleringRobotics/mapping_functionality.git
-cd mapping_functionality
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[oak]'
-wr-map doctor --mode capture --config configs/oakd-survey.json \
-  --output-root /mnt/nvme/mapping --probe-device
-wr-map capture --config configs/oakd-survey.json \
-  --output /mnt/nvme/mapping/bench-001 --duration 60
-wr-map status /mnt/nvme/mapping/bench-001
-wr-map validate /mnt/nvme/mapping/bench-001
+pip install -e '.[bags]'
+# Reuse the existing MAVROS connector; add --start-mavros only to own that link.
+wr-map capture --output runs/bench-001 --duration 120 --warmup 60
+wr-map status runs/bench-001
+wr-map validate runs/bench-001 --report runs/bench-001-audit.json
 ```
 
-Use a new directory for every capture. Omit `--duration` to stop with Ctrl+C or
-SIGTERM. `record` remains an alias for `capture`. The default requests RGB and two
-mono cameras at 2 fps with fixed exposure/focus, JPEG RGB and lossless mono PNG.
-The lossless recipe requests 1 fps and PNG throughout. Both need bench qualification.
+`capture` / `record` launches vendor ROS nodes and standard `ros2 bag record`.
+ROS launch owns driver/recorder startup and shutdown; the shell prepares the
+session and seals it afterward. The default stores full-resolution raw
+RGB and two mono streams at 2 fps plus IMU/PX4, calibration and timing messages.
+A new directory is required; `--duration 0` runs until Ctrl+C. For camera-only
+commissioning use `--camera-only`. Storage demand is about 4.4 GiB/minute.
 
-The recorder saves factory calibration, full-FOV images, raw IMU when available,
-per-stream timestamps, sequence numbers and checksums. Bounded buffering, disk
-reserve and stream/IMU watchdogs fail explicitly. Live `status.json` updates every
-five seconds; `wr-map status` flags stale recording heartbeats. Clean completion
-means accepted data was drained and sealed, not that a survey meets accuracy targets.
+The immutable session contains MCAP files, parameters, calibration, logs and
+checksums. ROS headers do not carry hardware sequence counters, so source sample
+loss remains unknown. A completed bag is not a claim of survey accuracy.
 
-For the existing **PX4/MAVROS companion connector**, follow the
-[integration and timing guide](docs/mavlink-integration.md). Keep MAVROS connected
-and release the OAK from the ROS camera driver before direct capture:
+Import images **offline**, after recording, to use the existing image workflows:
 
 ```bash
-wr-map capture --config configs/oakd-mavros-survey.json \
-  --telemetry-config configs/mavros-survey.json \
-  --output /mnt/nvme/mapping/px4-bench-001 --duration 60
-wr-map sync /mnt/nvme/mapping/px4-bench-001 \
-  --output /mnt/nvme/alignment/px4-bench-001 --min-fraction 0.9
+wr-map bag-import runs/bench-001 --output runs/bench-001-images
+wr-map process runs/bench-001-images --config configs/process-building.json \
+  --output runs/bench-001-building --prepare-only
 ```
 
-Configure the actual ROS node/topic names first. The supplied profile has a
-60-second warmup before the saved duration. Telemetry retains original headers
-and serialized ROS messages. Exposure-to-body-pose association uses measured
-clock bridges and qualified TIMESYNC evidence; it rejects stale timing and pose
-extrapolation. The derived body poses require calibrated camera mounting before
-use as camera priors. Physical timestamp accuracy still needs bench measurement.
+The import writes lossless PNGs and preserves ROS timestamps and CameraInfo
+calibration; original IMU/PX4 messages remain in MCAP. Legacy SDK datasets remain
+supported. The former Python acquisition command is explicitly `legacy-capture`.
 
 For the moving RTK/DGPS receiver and your nearby surveyed base, follow the
 [RTK and accuracy guide](docs/rtk-accuracy.md). The `ntrip` command verifies the
@@ -73,11 +62,11 @@ and antenna-to-camera calibration must be supplied from the actual installation.
 
 ## Mode 2 — offline processing
 
-Copy the complete session to the workstation. Install Python extras and the
+Copy the complete ROS session to the workstation and run `bag-import` into a separate image dataset. The examples below use that derived dataset. Install Python extras and the
 external engines using [postprocessing setup](docs/postprocessing.md).
 
 ```bash
-pip install -e '.[processing,terrain]'
+pip install -e '.[bags,processing,terrain]'
 wr-map doctor --mode process --backend building --output-root /data/runs
 
 # Review the plan; no output files are created.
@@ -123,7 +112,7 @@ and tightly coupled visual-inertial/rig bundle adjustment remain future work.
 ## Development without hardware
 
 ```bash
-pip install -e '.[dev,processing,terrain]'
+pip install -e '.[dev,bags,processing,terrain]'
 wr-map simulate --output /tmp/mapping-fixture --frames 12
 wr-map validate /tmp/mapping-fixture
 wr-map process /tmp/mapping-fixture --config configs/process-building.json \

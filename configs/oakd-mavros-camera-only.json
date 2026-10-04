@@ -1,0 +1,17 @@
+{
+  "streams": ["rgb", "left", "right"],
+  "fps": 2.0,
+  "exposure_us": 1000,
+  "iso": 400,
+  "white_balance_k": 5000,
+  "lens_position": null,
+  "rgb_format": "jpg",
+  "jpeg_quality": 97,
+  "imu": "off",
+  "imu_hz": 200,
+  "queue_frames": 12,
+  "min_free_gib": 5.0,
+  "stall_seconds": 10.0,
+  "warmup_seconds": 90,
+  "fsync_every": 10
+}

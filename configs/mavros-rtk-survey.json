@@ -11,7 +11,7 @@
     "gps_rtk": "/mavros/gpsstatus/gps1/rtk",
     "rtcm": "/mavros/gps_rtk/send_rtcm"
   },
-  "time_node": "/mavros/uas_1/time",
+  "time_node": "/mavros/time",
   "required": [
     "state",
     "imu_raw",

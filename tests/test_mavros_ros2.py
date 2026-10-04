@@ -120,6 +120,10 @@ def test_real_ros_parameter_snapshot_subscriptions_and_cdr_roundtrip():
         assert gps_row["fields"]["fix_type"] == 6
         assert gps_row["fields"]["dgps_age"] == 2**32 - 1
         assert deserialize_message(base64.b64decode(gps_row["cdr_base64"]), GPSRAW).h_acc == 10
+        from wallering_mapping.hardware_probe import telemetry
+        readiness = telemetry({"config": config.to_dict(), "seconds": 5, "gnss_profile": None})
+        assert readiness["summary"]["connected_seen"]
+        assert readiness["summary"]["sync"]["qualification"] == "qualified"
     finally:
         if subscriber:
             subscriber.close()

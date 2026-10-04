@@ -20,7 +20,7 @@ def rtk_topics():
 @dataclass(frozen=True)
 class TelemetryConfig:
     topics: dict = field(default_factory=default_topics)
-    time_node: str = "/mavros/uas_1/time"
+    time_node: str = "/mavros/time"
     required: tuple = ("state", "imu_raw", "pose", "timesync")
     queue_records: int = 4096
     qos_depth: int = 100

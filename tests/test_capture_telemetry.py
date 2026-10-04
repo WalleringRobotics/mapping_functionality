@@ -17,7 +17,8 @@ from wallering_mapping.mavros import TelemetryBuffer
 from wallering_mapping.telemetry_config import TelemetryConfig
 
 
-def test_camera_failure_stops_callbacks_drains_and_seals_accepted_telemetry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("emit_frame", [True, False])
+def test_camera_failure_stops_callbacks_drains_and_seals_accepted_telemetry(tmp_path, monkeypatch, emit_frame):
     config = TelemetryConfig(min_sync_samples=2)
     buffer = TelemetryBuffer(config, PARAMETERS)
     mono, ros = time.monotonic_ns(), time.time_ns()
@@ -64,7 +65,7 @@ def test_camera_failure_stops_callbacks_drains_and_seals_accepted_telemetry(tmp_
         sent = False
 
         def tryGet(self):
-            if self.sent:
+            if self.sent or not emit_frame:
                 return None
             self.sent = True
             return SimpleNamespace(getCvFrame=lambda: np.zeros((16, 16, 3), np.uint8))
@@ -86,7 +87,8 @@ def test_camera_failure_stops_callbacks_drains_and_seals_accepted_telemetry(tmp_
         oak.record(root, CaptureConfig(streams=("rgb",), imu="off", warmup_seconds=0, min_free_gib=0),
                    telemetry_config=config)
     manifest = json.loads((root / "manifest.json").read_text())
-    assert manifest["status"] == "failed" and manifest["counts"]["rgb"] == 1
+    assert manifest["status"] == "failed" and manifest["counts"].get("rgb", 0) == int(emit_frame)
+    assert "pipeline stopped" in manifest["stop_reason"]
     assert manifest["telemetry"]["summary"]["ever_qualified"]
     assert pipeline.stopped and closed
     assert buffer.queue.empty()

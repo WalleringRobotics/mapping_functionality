@@ -106,6 +106,8 @@ def associate(root, output, stream="rgb", min_fraction=.9):
     if not audit["valid"]:
         raise ValueError(f"Dataset failed validation: {audit['errors']}")
     manifest = json.loads((root / "manifest.json").read_text())
+    if manifest.get("source") == "rosbag2":
+        raise ValueError("ROS image import has no qualified clock bridge; audit the original bag timing first")
     if "telemetry" not in manifest:
         raise ValueError("Session contains no MAVROS telemetry")
     if stream not in manifest["config"]["streams"]:

@@ -26,9 +26,13 @@ def depthai():
 
 
 def device_details(device, dai):
+    imu_type = device.getConnectedIMU()
+    has_imu = bool(imu_type and imu_type.upper() not in {"NONE", "UNKNOWN"})
     return {
         "id": device.getDeviceId(), "depthai_version": dai.__version__,
-        "usb_speed": str(device.getUsbSpeed()), "imu_type": device.getConnectedIMU(),
+        "usb_speed": str(device.getUsbSpeed()), "imu_type": imu_type,
+        "imu_firmware": str(device.getIMUFirmwareVersion()) if has_imu else None,
+        "imu_firmware_embedded": str(device.getEmbeddedIMUFirmwareVersion()) if has_imu else None,
         "cameras": [{"socket": str(f.socket), "sensor": f.sensorName,
                      "width": f.width, "height": f.height, "autofocus": f.hasAutofocus}
                     for f in device.getConnectedCameraFeatures()],
@@ -92,6 +96,7 @@ def build_pipeline(device, dai, config):
     if config.imu == "required" and not has_imu:
         raise ValueError("IMU required, but this device reports none")
     if has_imu and config.imu != "off":
+        check_imu_firmware(device)
         imu = pipeline.create(dai.node.IMU)
         imu.enableIMUSensor(dai.IMUSensor.ACCELEROMETER_RAW, config.imu_hz)
         imu.enableIMUSensor(dai.IMUSensor.GYROSCOPE_RAW, config.imu_hz)
@@ -99,6 +104,19 @@ def build_pipeline(device, dai, config):
         imu.setMaxBatchReports(10)
         queues["imu"] = imu.out.createOutputQueue(maxSize=50, blocking=True)
     return pipeline, queues, calibration.eepromToJson(), settings
+
+
+def check_imu_firmware(device):
+    # DepthAI 3.10 rejects the old BNO086 3.2.13 firmware on the commissioned OAK.
+    # Keep the pinned SDK's bundled BNO firmware as the deployment baseline.
+    if device.getConnectedIMU().upper() in {"BNO085", "BNO086"}:
+        installed = str(device.getIMUFirmwareVersion())
+        embedded = str(device.getEmbeddedIMUFirmwareVersion())
+        if installed != embedded:
+            raise RuntimeError(f"BNO IMU firmware {installed} differs from the pinned DepthAI "
+                               f"baseline {embedded}; commission the IMU firmware before capture. "
+                               "Startup checks never flash firmware. Use imu=off only for an "
+                               "explicit camera-only profile.")
 
 
 def frame_metadata(message, dai):
@@ -275,10 +293,10 @@ def record(root, config, duration=None, device_id=None, telemetry_config=None):
                 pipeline.stop()
             except Exception as error:
                 status, reason, failure = "failed", str(error), error
-            if any(session.counts[s] == 0 for s in config.streams):
+            if failure is None and any(session.counts[s] == 0 for s in config.streams):
                 status, reason = "failed", "One or more requested streams have no saved images"
                 failure = failure or RuntimeError(reason)
-            if "imu" in queues and any(session.counts[s] == 0 for s in ("accelerometer", "gyroscope")):
+            if failure is None and "imu" in queues and any(session.counts[s] == 0 for s in ("accelerometer", "gyroscope")):
                 status, reason = "failed", "Enabled IMU has no samples for one or more sensors"
                 failure = failure or RuntimeError(reason)
             session.finish(status, reason)

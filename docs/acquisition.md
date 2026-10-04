@@ -1,5 +1,9 @@
 # Capture geometry and field procedure
 
+Current acquisition uses [ROS2/MCAP recording](rosbag-recording.md). Direct-SDK
+capture examples below are retained as legacy diagnostic procedures; they do not
+run or qualify the current ROS recording stack.
+
 ## Begin with slow, static-scene surveys
 
 For the first building survey, carry the mounted camera/Orin around the building.

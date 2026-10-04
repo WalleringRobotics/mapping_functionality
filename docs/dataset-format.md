@@ -1,4 +1,15 @@
-# Dataset contract v1
+# Recording and derived dataset contracts
+
+New recordings use the [ROS2/MCAP session contract](rosbag-recording.md#inspect-and-replay).
+The following v1 image/journal layout describes legacy SDK sessions and offline
+image imports. For `source=rosbag2`, calibration comes from CameraInfo, sequence
+numbers are import ordinals, IMU/PX4 remain in the original MCAP, and both
+`device_ns` / `host_synced_ns` compatibility fields contain original ROS header
+time. The import manifest records these exceptions explicitly; they must not be
+interpreted as hardware counters or measured clock bridges. Per-frame exposure,
+ISO, focus and white balance are requested driver settings, not device readbacks.
+
+## Image dataset v1
 
 Each session is a new directory; never resume or overwrite it.
 

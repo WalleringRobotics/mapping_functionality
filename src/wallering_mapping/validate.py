@@ -39,6 +39,9 @@ def validate(root, decode=True):
             errors.append(f"Session is {manifest['status']}, not complete; preserve and inspect")
         if manifest["source"] == "synthetic":
             warnings.append("Synthetic IO fixture: not a photogrammetric accuracy test")
+        ros_import = manifest["source"] == "rosbag2"
+        if ros_import:
+            warnings.append("ROS import: hardware sequence continuity is unknown; IMU/PX4 remain in MCAP")
         if sha256_file(root / "calibration.json") != manifest["calibration_sha256"]:
             errors.append("Calibration checksum mismatch")
         if manifest["status"] == "complete":
@@ -92,7 +95,7 @@ def validate(root, decode=True):
             if intervals and max(intervals) > 2500 / manifest["config"]["fps"]:
                 warnings.append(f"{stream}: frame interval exceeds 2.5 requested periods")
             report["streams"][stream] = {
-                "frames": counts[stream], "sequence_gaps": gaps[stream],
+                "frames": counts[stream], "sequence_gaps": None if ros_import else gaps[stream],
                 "interval_ms": distribution(intervals),
                 "observed_fps": ((len(times) - 1) * 1e9 / (times[-1] - times[0])
                                  if len(times) > 1 and times[-1] > times[0] else None),

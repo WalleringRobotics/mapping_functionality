@@ -2,6 +2,7 @@
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -183,11 +184,20 @@ def prepare(project, output, gcp_path=None, geo_path=None, vertical_datum=None):
     return result
 
 
+def check_image_platform(info, machine=None):
+    machine = machine or platform.machine()
+    native = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "AMD64": "amd64"}.get(machine)
+    if native is None or info.get("Os") != "linux" or info.get("Architecture") != native:
+        raise ValueError(f"ODM image {info.get('Os')}/{info.get('Architecture')} does not match "
+                         f"host {machine}; use a native processing host/image")
+
+
 def resolve_image(image):
     result = subprocess.run(
         ["docker", "image", "inspect", image], capture_output=True, text=True, check=True
     )
     info = json.loads(result.stdout)[0]
+    check_image_platform(info)
     identity = info["Id"]
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
         raise ValueError("Docker did not return an immutable image ID")

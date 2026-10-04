@@ -121,6 +121,23 @@ def test_session_seals_telemetry_and_audit_rejects_tampering(tmp_path):
     assert "Timesync qualification differs from recorded observations" in validate(root)["errors"]
 
 
+def test_audit_reports_observed_rates_timing_and_missing_optional_gnss(tmp_path):
+    root, _ = telemetry_fixture(tmp_path / "capture")
+    result = validate(root)
+    assert result["valid"]
+    telemetry = result["telemetry"]
+    assert telemetry["rates"]["pose"]["observed_hz"] == pytest.approx(10)
+    assert telemetry["rates"]["timesync"]["max_receipt_gap_ms"] == 100
+    assert telemetry["timing"]["qualified_samples"] == 19
+    assert telemetry["timing"]["max_consecutive_good"] == 20
+    assert telemetry["timing"]["required_consecutive_good"] == 2
+    assert telemetry["timing"]["round_trip_time_ms"]["p95"] == 1
+    assert telemetry["timing"]["offset_residual_ms"]["max"] == .0001
+    assert telemetry["timing"]["estimated_offset_ns"]["range"] == 0
+    assert telemetry["gnss_valid_fix_samples"] == 0
+    assert telemetry["missing_topics"]["gnss"] == "/mavros/global_position/global"
+
+
 def test_missing_sync_is_a_failed_capture_not_optional_success():
     config = replace(TelemetryConfig(), required=("timesync",), min_sync_samples=2)
     buffer = TelemetryBuffer(config, PARAMETERS)

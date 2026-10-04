@@ -1,5 +1,10 @@
 # Offline processing: building and terrain recipes
 
+ROS recordings must first be checked and imported using `wr-map bag-import`, as
+shown in the [recording guide](rosbag-recording.md#offline-image-preparation).
+All image-dataset paths below refer to that derived output or a legacy SDK session.
+Keep the original MCAP alongside it for inertial and telemetry processing.
+
 ## Workstation setup
 
 Use Linux and Python 3.10–3.12. Capture dependencies and processing dependencies are
@@ -8,13 +13,13 @@ separate; the Orin need not install reconstruction engines.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[processing,terrain]'
+pip install -e '.[bags,processing,terrain]'
 ```
 
 For buildings, install a CUDA-enabled **COLMAP 3.12.6** workstation build using the
 [official release/source instructions](https://github.com/colmap/colmap/releases/tag/3.12.6).
 Check `colmap -h` and `colmap feature_extractor -h`. The runner gates CLI execution
-to 3.12.x. The pinned `pycolmap==3.12.6` wheel reads models and reports poses; it does
+to 3.12.x. The pinned `pycolmap==3.12.6` package reads models and reports poses; it does
 not install the `colmap` executable. `cpu: true` changes sparse SIFT extraction and
 matching only. Dense PatchMatch still needs CUDA; for CPU-only sparse processing,
 set `dense: false` and `mesh: false` in a copied recipe.
@@ -38,6 +43,28 @@ memory, verify the Docker daemon/image, or qualify a survey. Version/container c
 also run when executing the relevant engine. Allow ample disk space: immutable
 originals, exports, derived PNGs/masks, engine inputs, databases, depth maps and
 failed attempts are retained. No automatic pruning occurs.
+
+## PyCOLMAP on Jetson ARM64
+
+PyPI's 3.12.6 release has no Linux ARM64 wheel. The [image](../docker/Dockerfile)
+builds it from the pinned source commit (`4d5b60e1`) using the
+[official source layout](https://github.com/colmap/colmap/tree/3.12.6/python) and
+installs it, so `deploy/run-platform-command.sh` already has `pycolmap`. To use the
+same wheel in a host venv, export it from the build stage:
+
+```bash
+docker buildx build -f docker/Dockerfile --target pycolmap-wheel \
+  --output type=local,dest=runs/pycolmap-wheel .
+.venv/bin/python -m pip install --no-deps runs/pycolmap-wheel/pycolmap-3.12.6-*.whl
+.venv/bin/python -c 'import pycolmap; print(pycolmap.__version__, pycolmap.has_cuda)'
+```
+
+PyCOLMAP 3.12.6's bindings require Ceres 2.1 or newer, but Ubuntu 22.04 ships 2.0, so
+the build stage compiles a checksum-pinned CPU Ceres 2.2.0 first. It repairs the wheel
+with auditwheel, so it bundles Ceres and its other native libraries; the host needs no compiler, devel
+packages or `LD_LIBRARY_PATH`. This CPU build supports model IO and quality
+assessment. It does not install a host COLMAP CLI or qualify CUDA dense
+reconstruction. Reduce `--build-arg BUILD_JOBS=1` if compiler memory pressure is high.
 
 ## Ingest and select photographs
 
