@@ -1,14 +1,16 @@
 # Camera upgrades and delivery roadmap
 
-## Initial acceptance milestones
+## Acceptance milestones
+
+Status as of 2026-10-04; evidence is in [hardware acceptance](hardware-acceptance.md).
 
 | Milestone | Evidence required | Current state |
 |---|---|---|
-| M0: software foundation | IO fixtures, corruption/failure tests, command plans | Implemented; tests runnable without hardware |
-| M1: Orin/OAK bench capture | Device/JetPack inventory; 20-minute capture, stop/fault checks | Requires target hardware |
-| M2: static building reconstruction | Connected sparse model, dense result, scale/control and held-out checks | Requires real capture |
+| M0: software foundation | IO fixtures, corruption/failure tests, command plans | Done; 168 tests run in the repository image (CI and Orin) |
+| M1: Orin/OAK bench capture | Inventory; reproducible runtime; 20-minute capture; stop/fault checks | ROS/MCAP stack and Docker image verified on 60 s runs with PX4, Ctrl+C and `docker stop`; 20-minute soak, service path and fresh-Orin preparation pending |
+| M2: static building reconstruction | Connected sparse model, dense result, scale/control and held-out checks | Bench bag imports and prepares (`--prepare-only`); no reconstruction executed |
 | M3: terrain product | GCP/CRS-verified ODM product and independent accuracy report | Calibrated runner implemented; real survey acceptance pending |
-| M4: moving platform capture | Blur, vibration, exposure timing, power and throughput acceptance | Not demonstrated |
+| M4: moving platform capture | Blur, vibration, exposure timing, power and throughput acceptance | Not demonstrated; blocked on timing and camera-to-body calibration |
 | M5: upgraded synchronized rig | Trigger/PTP/GNSS event evidence, calibration and metric rig solve | Planned |
 
 ## Upgrade decision matrix
@@ -34,25 +36,26 @@ mapping when integrating multiple cameras and navigation sensors.
 
 ## Prioritized engineering backlog
 
-1. Benchmark actual OAK sensor modes, USB load, host JPEG/PNG encoding, IMU reports,
-   memory and flush latency on the Nano; lock one qualified deployment profile.
-2. Add a physical status display/LED and controlled start-stop input, plus field QA
-   thumbnails; CLI status and the live heartbeat are already implemented.
-3. Add optional camera-side MJPEG or raw chunk storage only if measured bandwidth/CPU
-   requires it. Preserve exact frame/timestamp association and restart recovery.
-4. Add a controlled recovery command for interrupted sessions; never mutate originals.
-5. Bench-qualify the implemented receive-only MAVROS adapter and clock mapping;
-   qualify corrected rover camera geolocation and NTRIP forwarding against the actual
-   receiver/base. Camera and map budget reports are implemented; native receiver
-   correction-age evidence and explicit survey event marks need further integration.
-6. Add calibration tooling (intrinsics, distortion, camera-camera, camera-IMU, timing),
-   explicit metre/unit/frame conventions, and uncertainty evidence.
-7. Build a calibrated stereo/rig reconstruction adapter with validated exposure pairing.
-   Do not assume nearest timestamps alone are sufficient.
-8. Qualify the implemented ODM camera conversion, pinned runner and GCP/geo ingestion
-   on a real survey; qualify the COLMAP metric alignment and independent checkpoint
-   breakdown. Extend raster/CRS checks and geodetic QA.
-9. Add large-dataset matching, scene masks and repeat-survey comparisons after small
+1. **Timing and camera-to-body calibration.** Qualify OAK exposure-to-PX4 time
+   offset and the camera-IMU/camera-body rotation and lever arm, with uncertainty.
+   Provide a repeatable calibration mode that records a dedicated session and
+   produces a versioned calibration result the processing chain consumes. Recordings
+   stay `survey_ready=false` until this exists.
+2. Field-duration qualification: a 20-minute soak through the image with intended
+   workloads and thermal state; exercise the systemd service path and storage mount.
+3. RTK: qualify corrected rover geolocation and NTRIP forwarding against the actual
+   receiver/base; `/mavros/gpsstatus/gps1/rtk` is requested but not yet published.
+   Native receiver correction-age evidence and survey event marks need integration.
+4. First end-to-end map: take a recording through `bag-import`, building/terrain
+   processing and independent checkpoints on a workstation with CUDA COLMAP/ODM.
+5. Operator feedback: a physical status display/LED and controlled start/stop
+   input, plus field QA thumbnails; CLI status already exists.
+6. Controlled recovery for interrupted sessions; never mutate originals.
+7. Calibrated stereo/rig reconstruction with validated exposure pairing. Do not
+   assume nearest timestamps alone are sufficient.
+8. Qualify COLMAP metric alignment, ODM GCP/geo ingestion and checkpoint breakdowns
+   on a real survey; extend raster/CRS checks and geodetic QA.
+9. Large-dataset matching, scene masks and repeat-survey comparisons after small
    surveys consistently meet their defined accuracy objectives.
 
 ## Configuration changes needing requalification

@@ -96,6 +96,7 @@ elif args[:2] == ['bag', 'info']:
             assert sorted((tmp_path / 'events').read_text().splitlines()) == ['publisher_stopped', 'recorder_stopped']
             assert (output / 'state').read_text().strip() == 'complete'
             assert 'bag/test.mcap' in (output / 'SHA256SUMS').read_text()
+            assert '__pycache__' not in (output / 'SHA256SUMS').read_text()
             start = int((output / 'acquisition-start-ns.txt').read_text())
             end = int((output / 'acquisition-end-ns.txt').read_text())
             assert 0 < start < end
