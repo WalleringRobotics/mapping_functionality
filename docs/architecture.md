@@ -53,6 +53,12 @@ provides preflight, live capture status and software/machine provenance.
 `timing.py` samples clock bridges and qualifies timing evidence.
 `telemetry_audit.py` validates preserved messages without ROS;
 `association.py` derives exposure-aligned vehicle poses without modifying sources.
+`rtcm.py` verifies correction frames and surveyed station coordinates; `ntrip.py`
+forwards verified corrections through the existing MAVROS plugin. `gnss_accuracy.py`
+interpolates corrected rover positions at exposure and propagates calibrated rig,
+base and timing uncertainty. `georeference.py` aligns COLMAP/PLY geometry to metric
+projected axes; `map_accuracy.py` reports withheld-checkpoint errors and reference
+uncertainty without fitting to the checks. See the [RTK accuracy design](rtk-accuracy.md).
 
 The current adapter assumes CAM_A=RGB, CAM_B=left, CAM_C=right. Missing sockets fail
 preflight. Other wiring requires an adapter change. USB 2 and PoE-only transport

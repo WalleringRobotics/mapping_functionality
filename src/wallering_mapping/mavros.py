@@ -28,7 +28,8 @@ def stamp_ns(fields):
     if stamp is None:
         return None
     sec, nano = stamp["sec"], stamp["nanosec"]
-    if type(sec) is not int or type(nano) is not int or sec < 0 or not 0 <= nano < 10**9:
+    if (type(sec) is not int or type(nano) is not int or not -(2**31) <= sec < 2**31
+            or not 0 <= nano < 10**9):
         raise ValueError("Invalid ROS source header timestamp")
     return sec * 10**9 + nano
 
@@ -169,6 +170,9 @@ class MavrosSubscriber:
         self.buffer = TelemetryBuffer(self.config, parameters)
         types = {"state": State, "imu_raw": Imu, "attitude": Imu, "pose": PoseStamped,
                  "gnss": NavSatFix, "timesync": TimesyncStatus, "time_reference": TimeReference}
+        if set(self.config.topics) & {"gps_raw", "gps_rtk", "rtcm"}:
+            from mavros_msgs.msg import GPSRAW, GPSRTK, RTCM
+            types.update(gps_raw=GPSRAW, gps_rtk=GPSRTK, rtcm=RTCM)
         qos = QoSProfile(depth=self.config.qos_depth, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         def protect(action):
@@ -189,6 +193,8 @@ class MavrosSubscriber:
 
         self.subscriptions = []
         for role, message_class in types.items():
+            if role not in self.config.topics:
+                continue
             ros_type = message_class.__module__.split(".")[0] + "/msg/" + message_class.__name__
             self.subscriptions.append(self.node.create_subscription(
                 message_class, self.config.topics[role], callback(role, ros_type), qos))
