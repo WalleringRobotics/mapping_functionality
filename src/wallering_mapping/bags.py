@@ -116,7 +116,6 @@ def audit_bag(root):
               "capture_ready": False, "coverage_complete": True, "survey_ready": False, "errors": [], "warnings": [],
               "topics": {}, "cameras": {}, "imu_source_sequence_gaps": None,
               "limitations": ["ROS Image/Imu headers do not expose hardware sequence counters.",
-                              "COPY IMU messages combine reports; separate sensor timestamps are absent.",
                               "Driver ROS timestamps and bag receipt times are distinct.",
                               "Physical exposure timing and camera-to-body calibration remain unqualified."]}
     try:
@@ -132,6 +131,14 @@ def audit_bag(root):
             for key in keys:
                 if actual[name].get(key) != parameters[name][key]:
                     report["errors"].append(f"Requested/effective driver parameter mismatch: {name}.{key}")
+        if actual["imu"].get("i_sync_method") == "COPY":
+            report["limitations"].append(
+                "COPY IMU messages carry accelerometer timestamps with the latest gyroscope sample "
+                "copied in; gyroscope timing is quantised and may repeat (#18).")
+        else:
+            report["limitations"].append(
+                f"IMU sync {actual['imu'].get('i_sync_method')}: messages follow one sensor's samples; "
+                "the other sensor is interpolated onto them.")
         topics = (root / "topics.txt").read_text().splitlines()
         required = list(CAMERAS.values()) + [t.replace("image_raw", "camera_info")
                                            for t in CAMERAS.values()] + [IMU]

@@ -6,7 +6,7 @@ The first useful deliverable is an auditable OAK-D dataset on Orin Nano: photogr
 inertial measurements, calibration and enough metadata to reprocess later. A failed
 capture must be recognizable before leaving the site. Reconstruction runs offline.
 
-The bench uses IMX378 RGB, OV9282 mono cameras and a BNO086 on Orin Nano Super.
+The bench uses IMX378 RGB, OV9282 mono cameras and a BNO086 on Orin Nano Super. See the [OAK-D hardware reference](oak-d-hardware.md) for native rates and timing.
 Runtime inspection remains mandatory for each device. Standard OAK-D specifications are a reference, not a substitute
 for inspecting the connected device [R1](references.md).
 

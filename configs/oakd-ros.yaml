@@ -59,9 +59,12 @@
       i_enable_rotation: false
       i_acc_mode: ACCELEROMETER_RAW
       i_gyro_mode: GYROSCOPE_RAW
-      i_acc_freq: 100
-      i_gyro_freq: 100
-      i_sync_method: COPY
+      # BNO086 native points: gyro 25/33/50/100/200/400 Hz, accel 15/31/62/125/250/500 Hz
+      # (requests round up). No rate is common, so stamp messages on true gyro samples
+      # and interpolate the accelerometer onto them; COPY mis-stamps the gyro (#18).
+      i_acc_freq: 250
+      i_gyro_freq: 200
+      i_sync_method: LINEAR_INTERPOLATE_ACCEL
       i_message_type: IMU
       i_batch_report_threshold: 20
       i_max_batch_reports: 20
