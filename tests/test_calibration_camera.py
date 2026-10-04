@@ -253,3 +253,12 @@ def test_session_never_emits_entries_without_successful_cross_check(tmp_path, mo
     else:
         with pytest.raises(ValueError, match="cross-check"):
             cc.solve_camera_imu(tmp_path)
+
+
+def test_refuses_clock_phase_indistinguishable_from_mounting_rotation():
+    imu = np.arange(0., 8., .01)
+    gyro = np.column_stack([np.sin(2 * imu), np.cos(2 * imu), np.full(len(imu), .4)])
+    start = np.arange(.1, 7.5, .05)
+    camera = cc.GyroPath(imu, gyro).relative(start + .0073, start + .1573)
+    with pytest.raises(ValueError, match="Insufficient rotation"):
+        cc.solve_rotation_offset(start, start + .15, camera, imu, gyro)
