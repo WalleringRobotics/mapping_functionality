@@ -115,6 +115,11 @@ def parser():
     rig.add_argument("calibration", type=Path)
     rig.add_argument("--session", type=Path, help="Recording whose OAK factory calibration to use and match")
     rig.add_argument("--require-complete", action="store_true", help="Exit 2 while any link or uncertainty is unset")
+    solve = commands.add_parser("calibrate-solve", help="Estimate OAK-to-PX4 clock offset and mounting rotation from a motion session")
+    solve.add_argument("session", type=Path)
+    solve.add_argument("--calibration", type=Path, required=True, help="Rig calibration to start from (not modified)")
+    solve.add_argument("--output", type=Path, required=True, help="New directory for the updated calibration and report")
+    solve.add_argument("--max-offset-ms", type=float, default=200.0)
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -276,6 +281,25 @@ def main(argv=None):
             result = check(RigCalibration.read(args.calibration), args.session)
             print(json.dumps(result, indent=2))
             return 2 if args.require_complete and not result["complete"] else 0
+        elif args.command == "calibrate-solve":
+            from .calibration_imu import calibration_entries, solve_session
+            from .dataset import sha256_file, write_json
+            from .rig_calibration import RigCalibration, apply_entries, check
+            if args.output.exists():
+                raise ValueError("Output must be a new directory")
+            if args.output.resolve().is_relative_to(args.session.resolve()):
+                raise ValueError("Write calibration results outside the immutable source session")
+            calibration = RigCalibration.read(args.calibration)
+            solved = solve_session(args.session, max_offset_ms=args.max_offset_ms)
+            evidence = f"session {args.session.resolve().name}, bag metadata sha256 " + sha256_file(
+                args.session / "bag/metadata.yaml")
+            updated = apply_entries(calibration.data, calibration_entries(solved, calibration, evidence))
+            args.output.mkdir(parents=True)
+            write_json(args.output / "rig-calibration.json", updated)
+            solved["rotation"] = solved["rotation"].tolist()
+            result = {"imu_to_imu": solved, "calibration": check(RigCalibration(updated), args.session),
+                      "outputs": {"calibration": str(args.output / "rig-calibration.json")}}
+            write_json(args.output / "report.json", result)
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,
