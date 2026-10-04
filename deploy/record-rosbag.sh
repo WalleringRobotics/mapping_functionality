@@ -79,6 +79,8 @@ printf '%s\n' "${bag_topics[@]}" > "$bag_output/topics.txt"
 # Keep this shell alive long enough to seal files after launch has returned.
 trap ':' INT TERM
 export ROS_LOG_DIR="$bag_output/ros-log"
+# Launch imports the copied record.launch.py; keep bytecode out of the sealed session.
+export PYTHONDONTWRITEBYTECODE=1
 bag_result=0
 bag_device_args=()
 [[ -z "$bag_device" ]] || bag_device_args=("device_id:=$bag_device")

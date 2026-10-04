@@ -46,10 +46,15 @@ appropriate ownership when transferring.
 
 The default [driver profile](../configs/oakd-ros.yaml) requests RGB 4056×3040 and
 left/right 1280×800 at 2 fps, fixed exposure, RGB focus and white balance, with
-100 Hz raw accelerometer and gyroscope requests. The BNO's supported sensor rates
-and COPY synchronization can produce irregular combined IMU timestamps. The
-measured ROS IMU message rate is approximately 100 Hz; it is not proof of two
-independent lossless 100 Hz sensor streams. Driver 2.12.2 does not declare the
+raw gyroscope at 200 Hz and raw accelerometer at 250 Hz with
+`LINEAR_INTERPOLATE_ACCEL`: each `/oak/imu/data` message is a native gyroscope
+sample on its own timestamp, with the accelerometer interpolated onto it. The BNO086
+offers gyro 25/33/50/100/200/400 Hz and accel 15/31/62/125/250/500 Hz (requests round
+up), with no common rate. The former 100/100 Hz `COPY` profile stamped messages on the
+accelerometer's native ~128 Hz grid and copied the latest gyro sample in, so gyro
+timestamps were off by up to one accelerometer period and samples repeated; 400 Hz
+lost samples heavily. Some loss remains at 200 Hz ([#18](https://github.com/WalleringRobotics/mapping_functionality/issues/18));
+check the audit. See the [OAK-D hardware reference](oak-d-hardware.md). Driver 2.12.2 does not declare the
 batch-size requests with rotation disabled; use the saved parameter dump to
 establish what was actually accepted. Orientation is not enabled.
 
