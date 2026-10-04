@@ -156,12 +156,16 @@ of a textured, well-lit scene a few metres away; short exposure to avoid motion 
 
 ## Using the calibration
 
-`wr-map sync --rig-calibration FILE` applies the OAK→PX4 time offset and the
-camera→body transform to produce camera poses; `wr-map image-accuracy
---rig-calibration FILE` takes the antenna-to-camera lever arm, its covariance and the
-camera latency bound from it (see [MAVLink integration](mavlink-integration.md) and
-[RTK accuracy](rtk-accuracy.md)). Both reports list each link's source and treat
-`calibration-check`'s blocking items as blocking survey readiness. Offsets are added
-to the recorded exposure time (`DepthAI host-synced`, the same stamp the ROS driver
-publishes) to place it on the PX4 pose timeline, so a positive `offset_ns` means the
-OAK stamps exposures early relative to PX4.
+`wr-map sync --rig-calibration FILE` applies the camera-to-body spatial transform
+to produce diagnostic camera poses. `wr-map image-accuracy --rig-calibration FILE`
+uses its antenna-to-camera lever and covariance. Both reports retain link sources,
+unknown uncertainty and blocking reasons (see [MAVLink integration](mavlink-integration.md)
+and [RTK accuracy](rtk-accuracy.md)).
+
+The current `sync` consumer handles legacy SDK sessions only. A ROS IMU offset
+cannot be applied to SDK camera timestamps without validated clock-domain
+composition, including the camera exposure-to-IMU offset. Neither offset is
+applied here, and this explicitly blocks survey readiness. Unknown factory
+camera-to-camera covariance is preserved and also blocks RGB/right qualification.
+The accuracy profile must still supply measured exposure latency and vehicle
+attitude bounds; mounting sigma and gyro lag sigma do not substitute for them.
