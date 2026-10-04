@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .association import ClockMap, nearest_record
+from .association import ClockMap
 from .dataset import jsonl, safe_path, sha256_file, write_json
 from .reconstruct import load_project
 from .rtcm import RTCMStream, describe
@@ -30,6 +30,7 @@ PROFILE = {
     },
     "receiver": {
         "model_firmware_evidence": None,
+        "position_reference": "unknown",
         "gpsraw_time_mode": "unknown",
         "timestamp_validation_evidence": None,
         "horizontal_accuracy_model": "unknown",
@@ -44,9 +45,11 @@ PROFILE = {
         "attitude_sigma_rad": None,
         "calibration_evidence": None,
         "orientation_in_base_tangent_enu_verified": False,
+        "lever_from_receiver_reference_verified": False,
     },
     "motion": {
         "speed_bound_m_s": None,
+        "acceleration_bound_m_s2": None,
         "angular_rate_bound_rad_s": None,
         "receiver_latency_bound_ms": None,
         "camera_latency_bound_ms": None,
@@ -140,6 +143,7 @@ def read_profile(path):
             motion,
             [
                 "speed_bound_m_s",
+                "acceleration_bound_m_s2",
                 "angular_rate_bound_rad_s",
                 "receiver_latency_bound_ms",
                 "camera_latency_bound_ms",
@@ -149,6 +153,8 @@ def read_profile(path):
         for name in names:
             if section[name] is not None:
                 finite(section[name], name)
+    if rig["attitude_sigma_rad"] is not None and rig["attitude_sigma_rad"] > 0.1:
+        raise ValueError("Small-angle lever covariance requires attitude_sigma_rad <= 0.1 radians")
     for name in (
         "max_gnss_age_ms",
         "max_transport_age_seconds",
@@ -171,12 +177,15 @@ def read_profile(path):
         receiver["ellipsoidal_height_verified"],
         receiver["correction_age_field_verified"],
         rig["orientation_in_base_tangent_enu_verified"],
+        rig["lever_from_receiver_reference_verified"],
         policy["require_receiver_correction_age"],
     ):
         if type(value) is not bool:
             raise ValueError("Accuracy evidence switches must be booleans")
     if receiver["gpsraw_time_mode"] not in ("unknown", "px4_boot_via_mavros", "unix_via_mavros"):
         raise ValueError("Unsupported GPSRAW timestamp convention")
+    if receiver["position_reference"] not in ("unknown", "ARP", "APC"):
+        raise ValueError("Receiver position reference must be ARP, APC or unknown")
     if receiver["horizontal_accuracy_model"] not in (
         "unknown",
         "axis_1sigma",
@@ -262,6 +271,7 @@ def position_budget(
     attitude_sigma,
     motion_allowance,
     quantization_allowance=(0, 0),
+    base_coordinate_allowance=0,
 ):
     lever = np.asarray(lever, float)
     x, y, z = lever
@@ -284,13 +294,16 @@ def position_budget(
         "conditional_gaussian_vertical_95_m": v95,
         "deterministic_motion_allowance_m": motion_allowance,
         "coordinate_quantization_allowance_horizontal_vertical_m": list(quantization_allowance),
+        "base_coordinate_discrepancy_allowance_m": base_coordinate_allowance,
         "conditional_horizontal_95_plus_allowances_m": h95
         + motion_allowance
-        + quantization_allowance[0],
+        + quantization_allowance[0]
+        + base_coordinate_allowance,
         "conditional_vertical_95_plus_allowances_m": v95
         + motion_allowance
-        + quantization_allowance[1],
-        "model": "Gaussian zero-mean covariance model plus stated deterministic motion allowance; not a guaranteed bound",
+        + quantization_allowance[1]
+        + base_coordinate_allowance,
+        "model": "Gaussian zero-mean covariance model plus explicit deterministic allowances; not a guaranteed bound",
     }
 
 
@@ -365,6 +378,30 @@ def correction_history(root, profile):
     return snapshots, [s["mapped_monotonic_ns"] for s in snapshots]
 
 
+def gps_bracket(rows, times, exposure, max_age_ns):
+    """Use exact or bracketing source measurements, never receipt time or extrapolation."""
+    index = bisect.bisect_left(times, exposure)
+    if index < len(times) and times[index] == exposure:
+        before = after = rows[index]
+        weight = 0.0
+    elif index == 0 or index == len(times):
+        return None
+    else:
+        before, after = rows[index - 1], rows[index]
+        weight = (exposure - times[index - 1]) / (times[index] - times[index - 1])
+    before_dt = exposure - before["mapped_monotonic_ns"]
+    after_dt = after["mapped_monotonic_ns"] - exposure
+    if max(before_dt, after_dt) > max_age_ns:
+        return None
+    return {
+        "samples": [before, after] if before is not after else [before],
+        "after_weight": weight,
+        "before_interval_seconds": before_dt / 1e9,
+        "after_interval_seconds": after_dt / 1e9,
+        "clock_budget_ns": max(before["clock_budget_ns"], after["clock_budget_ns"]),
+    }
+
+
 def image_accuracy(session, alignment, profile_path, output, project=None):
     session, alignment, output = session.resolve(), alignment.resolve(), output.resolve()
     for source in (session, alignment, project.resolve() if project else None):
@@ -387,8 +424,11 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
     selected = None
     if project:
         metadata = load_project(project)
-        if metadata["source_manifest_sha256"] != source_hash:
-            raise ValueError("Selected image project belongs to another capture")
+        if (
+            metadata["source_manifest_sha256"] != source_hash
+            or metadata["stream"] != alignment_report["stream"]
+        ):
+            raise ValueError("Selected image project belongs to another capture/stream")
         selected = {image["name"] for image in metadata["images"]}
     base, receiver, rig, motion, policy = (
         profile[k] for k in ("base", "receiver", "rig", "motion", "policy")
@@ -443,6 +483,7 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
         "schema_version": 1,
         "status": "running",
         "source_manifest_sha256": source_hash,
+        "stream": alignment_report["stream"],
         "alignment_report_sha256": sha256_file(alignment / "report.json"),
         "profile_sha256": sha256_file(profile_path),
         "profile": profile,
@@ -479,7 +520,7 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
                 results.append(result)
                 continue
             mono = association["exposure_monotonic_ns"]
-            gps = nearest_record(gps_rows, gps_times, mono, int(policy["max_gnss_age_ms"] * 1e6))
+            gps = gps_bracket(gps_rows, gps_times, mono, int(policy["max_gnss_age_ms"] * 1e6))
             index = bisect.bisect_right(correction_times, mono) - 1
             correction = corrections[index] if index >= 0 else None
             if not correction or not correction["verified_base"]:
@@ -497,12 +538,28 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
                     reasons.append("Observation-correction transport missing/stale at exposure")
             result["correction_transport"] = correction
             if gps is None:
-                reasons.append("No fresh GPSRAW sample with a verified timestamp convention")
+                reasons.append(
+                    "No fresh bracketing GPSRAW samples with a verified timestamp convention"
+                )
                 results.append(result)
                 continue
-            fields = gps["fields"]
+            samples = gps["samples"]
+            source_fields = [s["fields"] for s in samples]
+            # Worst endpoint quality; these are derived gates, not an invented GPSRAW message.
+            fields = {
+                "fix_type": next(
+                    (s.get("fix_type") for s in source_fields if s.get("fix_type") != 6), 6
+                ),
+                "satellites_visible": min(s.get("satellites_visible", 255) for s in source_fields),
+                "dgps_age": max(s.get("dgps_age", 2**32 - 1) for s in source_fields),
+            }
+            for field in ("h_acc", "v_acc"):
+                values = [s.get(field, 0) for s in source_fields]
+                fields[field] = (
+                    max(values) if all(type(v) is int and 0 < v < 2**32 - 1 for v in values) else 0
+                )
             result.update(
-                receiver_sample=gps,
+                receiver_interpolation=gps,
                 fix_type=fields.get("fix_type"),
                 satellites=fields.get("satellites_visible"),
             )
@@ -536,6 +593,11 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
             )
             if not receiver["ellipsoidal_height_verified"]:
                 reasons.append("GPSRAW ellipsoidal-height extension unverified")
+            if (
+                receiver["position_reference"] == "unknown"
+                or not rig["lever_from_receiver_reference_verified"]
+            ):
+                reasons.append("Antenna reference/lever-arm convention is unverified")
             if not rig["orientation_in_base_tangent_enu_verified"]:
                 reasons.append("Body orientation is not verified in base-tangent ENU")
             if base["rover_uncertainty_includes_base"] is None:
@@ -569,8 +631,12 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
             ):
                 results.append(result)
                 continue
-            lat_lon_h = [fields["lat"] / 1e7, fields["lon"] / 1e7, fields["alt_ellipsoid"] / 1000]
-            rover_xyz, rover_axes = ecef_and_enu(lat_lon_h)
+            endpoints = [
+                ecef_and_enu([s["lat"] / 1e7, s["lon"] / 1e7, s["alt_ellipsoid"] / 1000])
+                for s in source_fields
+            ]
+            weights = [1 - gps["after_weight"], gps["after_weight"]] if len(samples) == 2 else [1.0]
+            rover_xyz = sum(w * point[0] for w, point in zip(weights, endpoints))
             base_xyz, base_axes = ecef_and_enu(base["wgs84_lat_lon_h"])
             result["base_distance_m"] = float(np.linalg.norm(rover_xyz - base_xyz))
             if result["base_distance_m"] > policy["max_base_distance_m"]:
@@ -589,35 +655,35 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
             vscale = (
                 1 if receiver["vertical_accuracy_model"] == "axis_1sigma" else 1.959963984540054
             )
-            hs, vs = hacc / 1000 / hscale, vacc / 1000 / vscale
-            # Rotate receiver-local ENU covariance into the surveyed base tangent frame.
-            transform = base_axes @ rover_axes.T
-            rover_cov = transform @ np.diag([hs * hs, hs * hs, vs * vs]) @ transform.T
+            rover_cov = np.zeros((3, 3))
+            for weight, (_, axes), sample in zip(weights, endpoints, source_fields):
+                hs, vs = sample["h_acc"] / 1000 / hscale, sample["v_acc"] / 1000 / vscale
+                transform = base_axes @ axes.T
+                # Linear covariance envelope allows unknown endpoint correlation;
+                # squared weights would silently assume independent GNSS errors.
+                rover_cov += weight * transform @ np.diag([hs * hs, hs * hs, vs * vs]) @ transform.T
             base_cov = covariance(base["covariance_enu_m2"], "base covariance")
             if base["rover_uncertainty_includes_base"]:
                 base_cov = np.zeros((3, 3))
                 result["limitations"].append(
                     "Receiver covariance declared to include base; shared component is not added twice"
                 )
-            gps_index = bisect.bisect_left(gps_times, mono)
-            candidates = gps_rows[max(0, gps_index - 1) : gps_index + 1]
-            sample_bracket_ms = (
-                min(candidates, key=lambda r: abs(r["mapped_monotonic_ns"] - mono))[
-                    "clock_budget_ns"
-                ]
-                / 1e6
-            )
             dt = (
                 association["estimated_alignment_budget_ms"]
-                + sample_bracket_ms
-                + gps["age_ms"]
+                + gps["clock_budget_ns"] / 1e6
                 + motion["receiver_latency_bound_ms"]
                 + motion["camera_latency_bound_ms"]
             ) / 1000
+            interpolation_allowance = (
+                0.5
+                * motion["acceleration_bound_m_s2"]
+                * gps["before_interval_seconds"]
+                * gps["after_interval_seconds"]
+            )
             allowance = (
                 motion["speed_bound_m_s"]
                 + motion["angular_rate_bound_rad_s"] * np.linalg.norm(lever)
-            ) * dt
+            ) * dt + interpolation_allowance
             budget = position_budget(
                 rover_cov,
                 base_cov,
@@ -627,6 +693,7 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
                 rig["attitude_sigma_rad"],
                 float(allowance),
                 (math.sqrt(2) * 111700 * 0.5e-7, 0.0005),
+                correction.get("base_coordinate_difference_m", 0) if correction else 0,
             )
             if budget["conditional_horizontal_95_plus_allowances_m"] > policy["horizontal_limit_m"]:
                 reasons.append("Conditional horizontal budget exceeds target")
@@ -643,6 +710,7 @@ def image_accuracy(session, alignment, profile_path, output, project=None):
                 qualified=not reasons,
                 exposure_monotonic_ns=mono,
                 time_motion_interval_seconds=dt,
+                interpolation_curvature_allowance_m=interpolation_allowance,
             )
             results.append(result)
         with (output / "images.jsonl").open("x") as file:

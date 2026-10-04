@@ -115,6 +115,7 @@ def bridge(config, output, duration=None):
     import rclpy
     from mavros_msgs.msg import RTCM
     from rclpy.context import Context
+    from rclpy.executors import SingleThreadedExecutor
     from rclpy.signals import SignalHandlerOptions
 
     output = output.resolve()
@@ -129,16 +130,18 @@ def bridge(config, output, duration=None):
         "receiver_applied_corrections": "Not observable; verify rover status separately",
     }
     write_json(output / "report.json", report)
-    context, node = Context(), None
+    context, node, executor = Context(), None, None
     try:
         rclpy.init(args=[], context=context, signal_handler_options=SignalHandlerOptions.NO)
         node = rclpy.create_node("wr_mapping_ntrip", context=context)
+        executor = SingleThreadedExecutor(context=context)
+        executor.add_node(node)
         publisher = node.create_publisher(RTCM, config.topic, 100)
         discovery_deadline = time.monotonic() + config.timeout_seconds
         while publisher.get_subscription_count() == 0:
             if time.monotonic() >= discovery_deadline:
                 raise RuntimeError("No ROS subscriber for the configured MAVROS RTCM input")
-            rclpy.spin_once(node, timeout_sec=0.1)
+            executor.spin_once(timeout_sec=0.1)
         guard, decoder = BaseGuard(config), RTCMStream()
         opener = urllib.request.build_opener(NoRedirect)
         # A stalled/closed stream fails rather than silently stitching different bases.
@@ -153,10 +156,12 @@ def bridge(config, output, duration=None):
             report["status"] = "forwarding"
             start = time.monotonic()
             while not stop.is_set() and (duration is None or time.monotonic() - start < duration):
-                rclpy.spin_once(node, timeout_sec=0)
+                executor.spin_once(timeout_sec=0)
                 data = response.read1(4096)
                 if not data:
                     raise RuntimeError("NTRIP correction stream closed unexpectedly")
+                if not guard.verified and time.monotonic() - start > config.timeout_seconds:
+                    raise RuntimeError("No surveyed-base verification before deadline")
                 for frame in decoder.feed(data):
                     details, allowed = guard.check(frame)
                     if not allowed and time.monotonic() - start > config.timeout_seconds:
@@ -203,6 +208,8 @@ def bridge(config, output, duration=None):
             "NTRIP forwarding failed; inspect status, caster/base settings and private credentials"
         ) from None
     finally:
+        if executor:
+            executor.shutdown()
         if node:
             node.destroy_node()
         if context.ok():

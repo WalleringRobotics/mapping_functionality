@@ -42,3 +42,11 @@ mapping accuracy. Passing software tests does not change the last two statements
 These contracts were inspected against the pinned source. Full Docker reconstruction,
 real sensor throughput and independent metric accuracy were not measured in the
 hardware-free development environment; the commissioning procedures remain required.
+
+## Corrected GNSS and accuracy references
+
+The [RTK accuracy guide](rtk-accuracy.md#reviewed-primary-references) records the
+reviewed MAVROS/PX4 source revisions, GNSS/RTCM units, ARP/APC survey references,
+ODM prior semantics and 2024 checkpoint guidance. Its budgets require verified
+receiver confidence and timestamp conventions; they do not assert actual receiver,
+camera-position or surface accuracy before field validation.

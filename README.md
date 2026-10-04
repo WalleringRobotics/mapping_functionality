@@ -51,6 +51,15 @@ The import writes lossless PNGs and preserves ROS timestamps and CameraInfo
 calibration; original IMU/PX4 messages remain in MCAP. Legacy SDK datasets remain
 supported. The former Python acquisition command is explicitly `legacy-capture`.
 
+For the moving RTK/DGPS receiver and your nearby surveyed base, follow the
+[RTK and accuracy guide](docs/rtk-accuracy.md). The `ntrip` command verifies the
+fixed base's station ID and ARP coordinates before forwarding corrections through
+MAVROS. The recorder retains raw GNSS uncertainty and correction evidence.
+`image-accuracy` reports each image's conditional position budget and produces
+qualified camera geolocation; `map-accuracy` reports independent checkpoint errors,
+reference uncertainty and shared base bias. Receiver semantics, time convention
+and antenna-to-camera calibration must be supplied from the actual installation.
+
 ## Mode 2 — offline processing
 
 Copy the complete ROS session to the workstation and run `bag-import` into a separate image dataset. The examples below use that derived dataset. Install Python extras and the
@@ -95,8 +104,10 @@ within a run: change a recipe or control file by starting a new run directory.
 
 The lower-level `export`, `reconstruct`, `dense` and `accuracy` commands remain
 available. Recorded IMU and stereo images are preserved but are not yet consumed
-as rig/VIO constraints. Optional MAVROS GNSS acquisition is implemented; automatic
-camera geolocation, building scale alignment and live SLAM remain future work.
+as rig/VIO constraints. Qualified MAVROS RTK camera geolocation is available for
+terrain; `georeference` aligns building models and PLY products to metric projected
+coordinates. Navigation alignment does not establish surface accuracy. Live SLAM
+and tightly coupled visual-inertial/rig bundle adjustment remain future work.
 
 ## Development without hardware
 
@@ -120,6 +131,7 @@ simulated PX4 publishers. OAK/PX4 hardware remains outside automated coverage.
 - [Architecture and decisions](docs/architecture.md)
 - [Dataset and timing contract](docs/dataset-format.md)
 - [PX4/MAVROS integration, time synchronization and bench acceptance](docs/mavlink-integration.md)
+- [Surveyed-base NTRIP, per-image budgets and total map accuracy](docs/rtk-accuracy.md)
 - [Jetson setup and commissioning](docs/jetson-setup.md)
 - [Capture geometry and field procedure](docs/acquisition.md)
 - [Postprocessing recipes, control formats and recovery](docs/postprocessing.md)

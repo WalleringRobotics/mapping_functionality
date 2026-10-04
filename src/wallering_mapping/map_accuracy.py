@@ -3,6 +3,7 @@
 import csv
 import html
 import json
+from pathlib import Path
 
 import numpy as np
 
@@ -26,6 +27,8 @@ MAP_PROFILE = {
     "horizontal_target_rmse_m": 0.1,
     "vertical_target_rmse_m": 0.15,
     "map_extent_xy_m": None,
+    "model_coordinates": "absolute",
+    "model_origin_xyz_m": None,
 }
 
 
@@ -73,7 +76,9 @@ def workflow_evidence(root):
     return workflow, controls
 
 
-def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None):
+def assess(
+    checks_path, profile_path, output, image_accuracy=None, workflow=None, georeference=None
+):
     profile = json.loads(profile_path.read_text())
     if set(profile) != set(MAP_PROFILE) or profile["schema_version"] != 1:
         raise ValueError("Unsupported map accuracy profile")
@@ -120,6 +125,7 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
         profile_path.resolve(),
         image_accuracy.resolve() if image_accuracy else None,
         workflow.resolve() if workflow else None,
+        georeference.resolve() if georeference else None,
     ):
         if source and (output.is_relative_to(source) or source.is_relative_to(output)):
             raise ValueError("Write map accuracy results outside all immutable inputs")
@@ -128,6 +134,57 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
     if workflow:
         workflow_data, used = workflow_evidence(workflow)
         controls |= used
+    georef = None
+    if georeference:
+        georef = json.loads((georeference / "report.json").read_text())
+        if georef["status"] != "complete":
+            raise ValueError("Georeferenced product is incomplete")
+        verify_inventory(georeference, georef["output_artifacts"])
+        if (
+            projected_crs(georef["crs"]) != crs
+            or georef["vertical_datum"] != profile["vertical_datum"]
+        ):
+            raise ValueError("Georeferenced product CRS/datum differs from checkpoint assessment")
+        controls.update(georef["camera_controls"])
+        if workflow_data:
+            if workflow_data["inputs"]["manifest_sha256"] != georef["source_manifest_sha256"]:
+                raise ValueError("Georeference and workflow refer to different captures")
+            transformed = {(item["path"], item["sha256"]) for item in georef["source_artifacts"]}
+            transformed |= {
+                (str((Path(georef["source_model_path"]) / name).resolve()), digest)
+                for name, digest in georef["source_model_hashes"].items()
+            }
+            if any(
+                (str((workflow / item["path"]).resolve()), item["sha256"]) not in transformed
+                for item in workflow_data["products"]
+                if Path(item["path"]).name
+                not in ("camera-poses.csv", "quality.json", "project.ini")
+            ):
+                raise ValueError("Georeference does not cover all sealed workflow products")
+    if (
+        workflow_data
+        and workflow_data["inputs"]["config"]["product"] == "building"
+        and georef is None
+    ):
+        raise ValueError(
+            "Unscaled building workflow needs verified georeferencing before metric accuracy"
+        )
+    origin = np.zeros(3)
+    if profile["model_coordinates"] == "local_origin":
+        value = georef["coordinate_origin_xyz_m"] if georef else profile["model_origin_xyz_m"]
+        origin = np.asarray(value, float)
+        if origin.shape != (3,) or not np.isfinite(origin).all():
+            raise ValueError("Local model coordinates require a finite stored projected XYZ origin")
+        if (
+            georef
+            and profile["model_origin_xyz_m"] is not None
+            and not np.allclose(origin, profile["model_origin_xyz_m"], atol=1e-6, rtol=0)
+        ):
+            raise ValueError("Profile origin differs from the sealed georeference")
+    elif profile["model_coordinates"] != "absolute" or profile["model_origin_xyz_m"] is not None:
+        raise ValueError(
+            "Choose absolute coordinates without an origin, or explicit local_origin coordinates"
+        )
     with checks_path.open(newline="") as file:
         rows = list(csv.DictReader(file))
     if (
@@ -142,6 +199,7 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
         )
     reference = np.array([[float(r[f"reference_{a}_m"]) for a in "xyz"] for r in rows])
     model = np.array([[float(r[f"model_{a}_m"]) for a in "xyz"] for r in rows])
+    model += origin
     sigmas = np.array([[float(r[f"reference_sigma_{a}_m"]) for a in "xyz"] for r in rows])
     if (
         not np.isfinite(reference).all()
@@ -184,6 +242,22 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
             raise ValueError("Image geolocation and map assessment CRS differ")
         if images["vertical_datum"] != profile["vertical_datum"]:
             raise ValueError("Image geolocation and checkpoint vertical datums differ")
+        if georef and georef["image_accuracy_report_sha256"] != sha256_file(
+            image_accuracy / "report.json"
+        ):
+            raise ValueError("Georeference used a different image accuracy report")
+    navigation_use = None
+    if images:
+        navigation_use = "Supplemental capture evidence; reconstruction use not established"
+        if georef:
+            navigation_use = "Qualified camera positions used as building alignment control"
+        elif (
+            workflow_data
+            and workflow_data["inputs"].get("geo_sha256")
+            == images["output_hashes"].get("camera-geo.txt")
+            and workflow_data["inputs"].get("geo_sha256")
+        ):
+            navigation_use = "Qualified camera geolocation supplied to terrain reconstruction"
     xy_min, xy_max = reference[:, :2].min(axis=0), reference[:, :2].max(axis=0)
     coverage = {
         "checkpoint_extent_min_xy_m": xy_min.tolist(),
@@ -209,6 +283,8 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
         "checks_sha256": sha256_file(checks_path),
         "profile_sha256": sha256_file(profile_path),
         "workflow_sha256": sha256_file(workflow / "workflow.json") if workflow else None,
+        "georeference_sha256": sha256_file(georeference / "report.json") if georeference else None,
+        "applied_model_origin_xyz_m": origin.tolist(),
         "image_report_sha256": sha256_file(image_accuracy / "report.json")
         if image_accuracy
         else None,
@@ -239,6 +315,7 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
         "alignment": "No transformation fitted using these checkpoints; all supplied coordinates must be pre-aligned",
         "control_ids_checked": sorted(controls),
         "reconstruction_quality": workflow_data.get("quality") if workflow_data else None,
+        "navigation_use": navigation_use,
         "image_navigation_summary": {
             k: images.get(k)
             for k in (
@@ -306,8 +383,24 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
     page += (
         "<table><tr><th>Quantity</th><th>Metres</th></tr>"
         + cells
-        + "</table><h2>How to read this</h2>"
+        + "</table><h2>Axis breakdown</h2><table><tr><th>Quantity (m)</th><th>X</th><th>Y</th><th>Z</th></tr>"
     )
+    for label, values in (
+        ("Signed observed bias", measured["bias_xyz_m"]),
+        ("Observed residual RMS", measured["rmse_axes_m"]),
+        ("Centred residual RMS", measured["centred_rmse_axes_m"]),
+        ("Reference survey sigma RMS", np.sqrt(reference_variance)),
+        ("Separate shared-base sigma", np.sqrt(np.maximum(0, np.diag(shared)))),
+        ("Reference-aware indicative RMS envelope", envelope_axes),
+    ):
+        page += (
+            "<tr><td>"
+            + html.escape(label)
+            + "</td>"
+            + "".join("<td>" + number(v) + "</td>" for v in values)
+            + "</tr>"
+        )
+    page += "</table><h2>How to read this</h2>"
     page += (
         "<p>"
         + html.escape(report["same_base_limit"])
@@ -319,13 +412,22 @@ def assess(checks_path, profile_path, output, image_accuracy=None, workflow=None
     )
     page += "<p>Camera-position uncertainty, reconstruction residuals and measured checkpoint errors are different quantities. Their component terms must not be summed again into an invented total accuracy.</p>"
     page += (
+        "<p>"
+        + html.escape(report["indicative_reference_aware_rmse_envelope"]["meaning"])
+        + "</p><h2>Coverage</h2><pre>"
+        + html.escape(json.dumps(coverage, indent=2))
+        + "</pre>"
+    )
+    page += (
         '<p><a href="checkpoints.csv">Individual checkpoint errors</a> · <a href="report.json">Full breakdown and evidence</a></p><h2>Surface classes</h2><pre>'
         + html.escape(json.dumps(groups, indent=2))
         + "</pre>"
     )
     if images:
         page += (
-            "<h2>Image navigation evidence</h2><pre>"
+            "<h2>Image navigation evidence</h2><p>"
+            + html.escape(navigation_use)
+            + "</p><pre>"
             + html.escape(json.dumps(report["image_navigation_summary"], indent=2))
             + "</pre>"
         )

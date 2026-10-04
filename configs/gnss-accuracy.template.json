@@ -12,6 +12,7 @@
   },
   "receiver": {
     "model_firmware_evidence": null,
+    "position_reference": "unknown",
     "gpsraw_time_mode": "unknown",
     "timestamp_validation_evidence": null,
     "horizontal_accuracy_model": "unknown",
@@ -25,10 +26,12 @@
     "lever_covariance_flu_m2": null,
     "attitude_sigma_rad": null,
     "calibration_evidence": null,
-    "orientation_in_base_tangent_enu_verified": false
+    "orientation_in_base_tangent_enu_verified": false,
+    "lever_from_receiver_reference_verified": false
   },
   "motion": {
     "speed_bound_m_s": null,
+    "acceleration_bound_m_s2": null,
     "angular_rate_bound_rad_s": null,
     "receiver_latency_bound_ms": null,
     "camera_latency_bound_ms": null,

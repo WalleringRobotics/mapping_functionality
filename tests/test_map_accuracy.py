@@ -100,3 +100,29 @@ def test_external_checks_do_not_add_common_base_twice(tmp_path):
     assert report["indicative_reference_aware_rmse_envelope"]["horizontal_m"] == pytest.approx(
         np.sqrt(0.005**2 + 2 * 0.001**2)
     )
+
+
+def test_local_model_origin_is_applied_once_without_fitting_checks(tmp_path):
+    import csv
+    import json
+
+    checks, profile = inputs(tmp_path)
+    p = json.loads(profile.read_text())
+    p["model_coordinates"] = "local_origin"
+    p["model_origin_xyz_m"] = [400000, 5700000, 100]
+    write_json(profile, p)
+    with checks.open() as file:
+        reader = csv.DictReader(file)
+        rows = list(reader)
+        fields = reader.fieldnames
+    for row in rows:
+        for index, axis in enumerate("xyz"):
+            key = "reference_" + axis + "_m"
+            row[key] = str(float(row[key]) + p["model_origin_xyz_m"][index])
+    with checks.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    report = assess(checks, profile, tmp_path / "report")
+    assert report["measured_checkpoint_comparison"]["rmse_horizontal_m"] == pytest.approx(0.005)
+    assert report["applied_model_origin_xyz_m"] == [400000, 5700000, 100]

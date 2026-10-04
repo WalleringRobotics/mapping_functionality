@@ -103,6 +103,14 @@ def parser():
     map_accuracy.add_argument("--output", type=Path, required=True)
     map_accuracy.add_argument("--image-accuracy", type=Path)
     map_accuracy.add_argument("--workflow", type=Path)
+    map_accuracy.add_argument("--georeference", type=Path)
+    georef = commands.add_parser("georeference", help="Align COLMAP and PLY products using qualified camera GNSS positions")
+    georef.add_argument("project", type=Path)
+    georef.add_argument("--model", type=Path, required=True)
+    georef.add_argument("--image-accuracy", type=Path, required=True)
+    georef.add_argument("--output", type=Path, required=True)
+    georef.add_argument("--artifact", type=Path, action="append", default=[])
+    georef.add_argument("--max-residual-m", type=positive, default=0.15)
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -251,9 +259,14 @@ def main(argv=None):
             return 0 if result["passed"] else 2
         elif args.command == "map-accuracy":
             from .map_accuracy import assess
-            result = assess(args.checkpoints, args.profile, args.output, args.image_accuracy, args.workflow)
+            result = assess(args.checkpoints, args.profile, args.output, args.image_accuracy,
+                            args.workflow, args.georeference)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
+        elif args.command == "georeference":
+            from .georeference import georeference
+            result = georeference(args.project, args.model, args.image_accuracy, args.output,
+                                  args.artifact, args.max_residual_m)
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,

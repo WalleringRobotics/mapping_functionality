@@ -142,3 +142,29 @@ original filenames, exposure clocks, body-pose interpolation evidence, optional
 nearest IMU/GNSS fields and estimated temporal budgets. Unassociated images are
 retained with reasons. There is no camera mounting transform or automatic pose
 fusion. See [integration and timing acceptance](mavlink-integration.md).
+
+## Corrected GNSS and derived accuracy
+
+The RTK telemetry profile adds `gps_raw`, optional `gps_rtk` and `rtcm` roles to
+the same immutable message journal. Raw integer coordinates, altitude fields,
+uncertainty fields, fix type and correction-age sentinel are preserved. GPSRAW
+original headers can contain valid negative signed seconds after an incorrectly
+reapplied UTC offset; they are recorded without receipt-time substitution.
+The explicit deployed timestamp convention is verified during offline reporting.
+
+`ntrip` seals a separate raw RTCM and forwarding journal. The capture's RTCM
+subscription independently records the published correction stream. Base station
+descriptors and observation freshness are distinct from receiver-applied age.
+
+`image-accuracy` creates sealed JSONL/CSV/HTML reports. Each image retains exact or
+bracketing source GNSS samples, ECEF interpolation weight, camera lever transform,
+covariance components, deterministic allowances and qualification reasons. An
+optional selected-image project restricts names for `camera-geo.txt`. Source
+capture, alignment, profile and derived output hashes identify the inputs used.
+
+`georeference` creates a transformed COLMAP model and PLY copies, navigation-control
+residuals, source/output hashes and a projected XYZ origin. Add that origin once
+to the stored local metre coordinates. `map-accuracy` seals independent checkpoint
+errors and the reference/shared-base breakdown, optionally linked to those products.
+The latter does not fit a transformation on the checks. See the
+[accuracy contract and operator guide](rtk-accuracy.md).
