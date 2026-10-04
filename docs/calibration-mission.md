@@ -104,6 +104,7 @@ write a separate review JSON beside that downloaded artifact:
 {
   "schema_version": 1,
   "operator": "reviewer name",
+  "source_seal_sha256": "SHA256 of this recording's SHA256SUMS",
   "plan_sha256": "SHA256 of example.plan",
   "phase_map_sha256": "SHA256 of example.plan.phases.json",
   "zero_based_px4_items_match": true,
@@ -115,7 +116,7 @@ write a separate review JSON beside that downloaded artifact:
 ```
 
 Pass `--verified-numbering --numbering-evidence PATH` only after this review.
-Changing either mission/map or downloaded artifact invalidates the binding.
+Changing the recording seal, mission/map or downloaded artifact invalidates the binding.
 Missing navigation endpoints, reordered/duplicate indices, restarts, unknown
 indices or invalid clocks leave the entire extraction unqualified; original
 events remain visible for diagnosis. Non-navigation commands need not emit

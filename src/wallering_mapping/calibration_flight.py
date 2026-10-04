@@ -27,7 +27,7 @@ def run(args):
                                  args.verified_numbering, args.numbering_evidence)
 
 
-def verified_map(plan_path, phase_path, verified_numbering, evidence_path):
+def verified_map(plan_path, phase_path, verified_numbering, evidence_path, source_seal_hash):
     plan_hash, phase_hash = sha256_file(plan_path), sha256_file(phase_path)
     plan, phases = (json.loads(p.read_text()) for p in (plan_path, phase_path))
     if (plan.get("fileType") != "Plan" or phases.get("schema_version") != 1
@@ -50,9 +50,10 @@ def verified_map(plan_path, phase_path, verified_numbering, evidence_path):
         review = json.loads(evidence_path.read_text())
         if (review.get("schema_version") != 1 or review.get("plan_sha256") != plan_hash
                 or review.get("phase_map_sha256") != phase_hash
+                or review.get("source_seal_sha256") != source_seal_hash
                 or review.get("zero_based_px4_items_match") is not True
                 or not str(review.get("operator") or "").strip()):
-            raise ValueError("Numbering review must bind both hashes and operator confirmation")
+            raise ValueError("Numbering review must bind source seal, plan/map hashes and operator confirmation")
         downloaded = review.get("downloaded_mission", {})
         download_path = safe_path(evidence_path.parent, downloaded.get("path", ""))
         if not download_path.is_file() or sha256_file(download_path) != downloaded.get("sha256"):
@@ -72,11 +73,12 @@ def extract_flight_phases(root, plan, phase_map, output, verified_numbering=Fals
     if any(p.is_relative_to(output) for p in (plan, phase_map,
             *([Path(numbering_evidence).resolve()] if numbering_evidence else []))):
         raise ValueError("Flight phase output must be separate from mission inputs")
-    mapped, plan_hash, phase_hash, evidence = verified_map(
-        plan, phase_map, verified_numbering, numbering_evidence)
     sealed = check_seal(root)
     if (root / "state").read_text().strip() != "complete":
         raise ValueError("Recording did not finish cleanly")
+    source_seal_hash = sha256_file(root / "SHA256SUMS")
+    mapped, plan_hash, phase_hash, evidence = verified_map(
+        plan, phase_map, verified_numbering, numbering_evidence, source_seal_hash)
     errors, events = [], []
     with reader(root) as bag:
         selected = [c for c in bag.connections if c.topic == TOPIC]
@@ -134,7 +136,7 @@ def extract_flight_phases(root, plan, phase_map, output, verified_numbering=Fals
                         "meaning": "Between reached endpoints; transit, settling and holds may overlap"})
     report = {"schema_version": 1, "kind": "flight_phase_evidence", "status": "complete",
               "passed": qualified, "sequence_qualified": qualified, "survey_ready": False,
-              "source_seal_sha256": sha256_file(root / "SHA256SUMS"), "sealed_files": sealed,
+              "source_seal_sha256": source_seal_hash, "sealed_files": sealed,
               "plan_sha256": plan_hash, "phase_map_sha256": phase_hash,
               "numbering_evidence": evidence, "errors": errors,
               "warnings": [] if evidence else ["Mission numbering unverified: diagnostic labels only"],

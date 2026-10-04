@@ -40,6 +40,7 @@ def fixture(tmp_path, change=None):
     downloaded.write_text(plan.read_text())
     evidence = tmp_path / "numbering-review.json"
     evidence.write_text(json.dumps({"schema_version": 1, "operator": "synthetic test only",
+        "source_seal_sha256": sha256_file(root / "SHA256SUMS"),
         "plan_sha256": generated["plan_sha256"], "phase_map_sha256": sha256_file(phases),
         "zero_based_px4_items_match": True,
         "downloaded_mission": {"path": downloaded.name, "sha256": sha256_file(downloaded)}}))
@@ -110,4 +111,27 @@ def test_failed_recording_is_refused_without_output(tmp_path):
     (root / "state").write_text("failed\n")
     with pytest.raises(ValueError, match="finish cleanly"):
         extract_flight_phases(root, plan, phases, tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("source_hash", [None, "wrong", "0" * 64])
+def test_numbering_review_must_bind_the_current_recording(tmp_path, source_hash):
+    root, plan, phases, evidence = fixture(tmp_path)
+    review = json.loads(evidence.read_text())
+    if source_hash is None:
+        review.pop("source_seal_sha256")
+    else:
+        review["source_seal_sha256"] = source_hash
+    evidence.write_text(json.dumps(review))
+    with pytest.raises(ValueError, match="source seal"):
+        extract_flight_phases(root, plan, phases, tmp_path / "out", True, evidence)
+    assert not (tmp_path / "out").exists()
+
+
+def test_numbering_review_from_previous_seal_is_refused(tmp_path):
+    root, plan, phases, evidence = fixture(tmp_path)
+    (root / "additional-flight-evidence.txt").write_text("A different sealed recording")
+    seal(root)
+    with pytest.raises(ValueError, match="source seal"):
+        extract_flight_phases(root, plan, phases, tmp_path / "out", True, evidence)
     assert not (tmp_path / "out").exists()
