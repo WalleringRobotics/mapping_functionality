@@ -1,0 +1,10 @@
+{
+  "product": "terrain",
+  "stream": "rgb",
+  "interval_seconds": 0.5,
+  "odm_image": "opendronemap/odm:3.6.2",
+  "orthophoto_cm": 2.0,
+  "dem_cm": 5.0,
+  "dtm": false,
+  "max_concurrency": 4
+}

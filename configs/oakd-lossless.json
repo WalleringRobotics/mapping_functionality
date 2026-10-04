@@ -1,0 +1,9 @@
+{
+  "streams": ["rgb", "left", "right"],
+  "fps": 1.0,
+  "rgb_format": "png",
+  "imu": "auto",
+  "exposure_us": 1000,
+  "iso": 400
+}
+

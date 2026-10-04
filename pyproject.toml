@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wallering-mapping"
+version = "0.1.0"
+description = "Auditable OAK-D acquisition and offline photogrammetry preparation"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = ["numpy==1.26.4", "opencv-python-headless==4.11.0.86"]
+
+[project.optional-dependencies]
+oak = ["depthai==3.10.0"]
+processing = ["pycolmap==3.12.6"]
+terrain = ["pyproj==3.7.1"]
+dev = ["pytest>=8,<9", "ruff>=0.9,<1"]
+
+[project.scripts]
+wr-map = "wallering_mapping.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

@@ -1,0 +1,11 @@
+{
+  "product": "building",
+  "stream": "rgb",
+  "interval_seconds": 0.5,
+  "matcher": "exhaustive",
+  "dense": true,
+  "mesh": true,
+  "max_image_size": 2000,
+  "min_registered_fraction": 0.9,
+  "min_sparse_points": 100
+}
