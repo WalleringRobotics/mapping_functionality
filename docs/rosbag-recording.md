@@ -174,10 +174,12 @@ reset logs are described in [MAVLink integration](mavlink-integration.md#tempora
 Remove propellers, support the rigidly mounted OAK/PX4 assembly, provide cable
 strain relief, and keep cameras facing a textured scene at least 2 m away.
 Follow the terminal prompts: still 10 s, then three 20 s cycles, each containing
-one smooth roll sweep through ±30° (6 s), one pitch sweep (7 s) and one yaw sweep
-(7 s); finish with free multi-axis motion (30 s) and still 10 s. Cycling axes
-keeps independent solver windows observable while retaining three sweeps per
-axis. `session.json` marks `kind: calibration` and
+roll (6 s), pitch (7 s) and yaw (7 s). Make about three smooth sweeps through
+±30° within each axis interval, roughly one full swing every 2 s and nine total
+sweeps per axis. Keep amplitude and pace comfortable while supporting the rig;
+finish with free multi-axis motion (30 s) and still 10 s. This deliberate pace
+and cycle ordering keep independent solver windows observable; slower or weaker
+recordings may honestly fail excitation gates. `session.json` marks `kind: calibration` and
 `calibration-phases.json` records the actual host realtime of each prompt. These
 are operator hints, not measured rotations or solver ground truth. Normal seal
 and audit rules apply; an interrupted calibration can preserve a clean bag but
@@ -212,7 +214,11 @@ deficit; duplicate/backward IMU stamps fail validation. PX4 IMU below 95% of an
 explicitly requested rate fails validation.
 
 For qualification, record both the historical default and candidate for at least
-1200 seconds after warmup. Archive `tegrastats` during each run and use
+1200 seconds after warmup. Each session saves `resources.jsonl` every 5 seconds
+with host CPU/RAM, optional built-in Jetson temperature readings, free space and
+observed bag size. Unreadable CPU/GPU temperature values are omitted and remain
+missing thermal acceptance evidence; no extra sensor is required. Archive `tegrastats`
+for additional Jetson clock/throttle evidence during each run and use
 `wr-map validate SESSION --report runs/NEW-audit.json`. Inspect each in-window
 camera and IMU rate (within 1%), no interior gaps, USB SUPER in the driver log,
 mean/peak bag write load, RAM/CPU and maximum temperature/thermal margin. Check

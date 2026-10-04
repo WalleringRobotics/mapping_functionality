@@ -9,7 +9,8 @@ import time
 
 CALIBRATION_PHASES = ((10, "still_start", "Keep the rig still for 10 seconds."),) + tuple(
     (seconds, f"{axis}_{cycle}",
-     f"Cycle {cycle}/3: one smooth {axis} sweep through +/-30 degrees, then return to centre.")
+     f"Cycle {cycle}/3: about three smooth {axis} sweeps through +/-30 degrees "
+     "(one full swing per 2 seconds), within comfortable hand motion.")
     for cycle in range(1, 4)
     for seconds, axis in ((6, "roll"), (7, "pitch"), (7, "yaw"))
 ) + (

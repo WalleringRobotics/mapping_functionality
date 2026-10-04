@@ -146,6 +146,7 @@ def sample_loss(stamps, start, end, rate_hz=None, values=None):
               "requested_hz": rate_hz, "expected_samples": None, "missing_samples": None,
               "loss_percent": None, "gaps": 0, "max_gap_ms": None, "missing_in_gaps": 0,
               "repeated_samples": None, "measured_hz": None,
+              "window_hz": int(window.size) * 1e9 / (end - start) if end > start else None,
               "hardware_sample_loss": None, "invalid_intervals": 0,
               "count_basis": "nominal rate times duration; boundary phase and clock drift are unknown"}
     if window.size >= 2:
@@ -363,7 +364,8 @@ def audit_bag(root):
                     if max(times[0] - start, end - times[-1]) > 3e9 / expected:
                         report["coverage_complete"] = False
                         report["warnings"].append(f"Image coverage misses over three frame periods at a bag boundary: {topic}")
-            for topic in [*CAMERAS.values(), IMU, *(PX4_REQUIRED if "/mavros/state" in topics else ())]:
+            for topic in [*CAMERAS.values(), IMU, *(PX4_REQUIRED if "/mavros/state" in topics or px4_rate else ()),
+                          *(["/mavros/imu/data"] if px4_rate else [])]:
                 times = received[topic]
                 if times and max(times[0] - start, end - times[-1], max(np.diff(times), default=0)) > 5e9:
                     report["errors"].append(f"Required stream absent/stalled for over 5 seconds: {topic}")
@@ -393,7 +395,8 @@ def audit_bag(root):
             if topic in imu_topics and loss["invalid_intervals"]:
                 report["errors"].append(f"Nonmonotonic IMU stamps in acquisition window: {topic}")
             if topic in ("/mavros/imu/data_raw", "/mavros/imu/data") and px4_rate:
-                if loss["measured_hz"] is None or loss["measured_hz"] < .95 * px4_rate:
+                if (loss["measured_hz"] is None or loss["measured_hz"] < .95 * px4_rate
+                        or loss["window_hz"] is None or loss["window_hz"] < .95 * px4_rate):
                     report["errors"].append(f"PX4 IMU rate below 95% of request: {topic}")
             # Repeats alone are not flagged: a stationary, quantised gyro repeats by chance.
             if topic in imu_topics and loss["gaps"]:

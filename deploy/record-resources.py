@@ -29,7 +29,7 @@ def thermal():
         try:
             zones[path.name] = {'type': (path / 'type').read_text().strip(),
                                 'temperature_c': int((path / 'temp').read_text()) / 1000}
-        except (OSError, ValueError):
+        except (OSError, ValueError, TypeError):
             continue
     return zones
 

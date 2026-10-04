@@ -27,7 +27,7 @@ def seal(root):
 
 
 def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=False, imu_drop=(),
-                imu_repeat=(), mono_fps=2):
+                imu_repeat=(), mono_fps=2, px4_burst=False):
     root.mkdir()
     # The fixture IMU publishes at 100 Hz on gyro times, whatever the default profile.
     yaml = YAML()
@@ -54,6 +54,8 @@ def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=Fa
             for name, kind in ((topic, 'Image'), (topic.replace('image_raw', 'camera_info'), 'CameraInfo')):
                 conns[name] = writer.add_connection(name, f'sensor_msgs/msg/{kind}', typestore=store)
         conns[IMU] = writer.add_connection(IMU, 'sensor_msgs/msg/Imu', typestore=store)
+        if px4_burst:
+            conns['/mavros/imu/data'] = writer.add_connection('/mavros/imu/data', 'sensor_msgs/msg/Imu', typestore=store)
         for i in range(1501 if short else 501 if tail_cut else 151):
             ns = 1_790_000_000_000_000_000 + i * 10_000_000
             if i % min(50, 100 // mono_fps) == 0:
@@ -83,6 +85,12 @@ def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=Fa
                     t['geometry_msgs/msg/Vector3'](rate, 0., 0.), zero,
                     t['geometry_msgs/msg/Vector3'](0.,0.,9.81), zero)
                 writer.write(conns[IMU], ns, store.serialize_cdr(msg, msg.__msgtype__))
+            if px4_burst and i <= 100:
+                msg = t['sensor_msgs/msg/Imu'](header(ns, 'px4'),
+                    t['geometry_msgs/msg/Quaternion'](0.,0.,0.,1.), zero,
+                    t['geometry_msgs/msg/Vector3'](0.,0.,0.), zero,
+                    t['geometry_msgs/msg/Vector3'](0.,0.,9.81), zero)
+                writer.write(conns['/mavros/imu/data'], ns, store.serialize_cdr(msg, msg.__msgtype__))
     seal(root)
     return root
 
@@ -305,3 +313,21 @@ def test_mavlink_wire_load_and_sequence_gap_estimates_are_windowed():
     assert report["duplicate_sequences"] == 1
     assert report["reordered_or_reset_sequences"] == 1
     assert report["received_wire_bytes_per_second"] == pytest.approx(5 * 74 / 3)
+
+
+def test_px4_filtered_imu_brief_full_rate_burst_fails_acquisition_coverage(tmp_path):
+    from types import SimpleNamespace
+    from wallering_mapping.recording import request_imu_rate
+    root = fixture_bag(tmp_path / 'recording', short=True, px4_burst=True)
+    (root / 'session.json').write_text(json.dumps({'kind': 'survey', 'px4_imu_requested_hz': 100}))
+    for name, rate in [('request', 100), ('restore', 0)]:
+        request_imu_rate(rate, root / f'px4-rate-{name}.json',
+                         lambda *_: SimpleNamespace(success=True, result=0))
+    window(root, 0, 15)
+    report = audit_bag(root)
+    assert not report['capture_ready']
+    loss = report['topics']['/mavros/imu/data']['in_window']
+    assert loss['measured_hz'] == 100  # Active-span rate must not mask early stop.
+    assert loss['window_hz'] == pytest.approx(101 / 15)
+    assert 'PX4 IMU rate below 95% of request: /mavros/imu/data' in report['errors']
+    assert 'Required stream absent/stalled for over 5 seconds: /mavros/imu/data' in report['errors']
