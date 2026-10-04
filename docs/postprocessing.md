@@ -19,7 +19,7 @@ pip install -e '.[bags,processing,terrain]'
 For buildings, install a CUDA-enabled **COLMAP 3.12.6** workstation build using the
 [official release/source instructions](https://github.com/colmap/colmap/releases/tag/3.12.6).
 Check `colmap -h` and `colmap feature_extractor -h`. The runner gates CLI execution
-to 3.12.x. The pinned `pycolmap==3.12.6` wheel reads models and reports poses; it does
+to 3.12.x. The pinned `pycolmap==3.12.6` package reads models and reports poses; it does
 not install the `colmap` executable. `cpu: true` changes sparse SIFT extraction and
 matching only. Dense PatchMatch still needs CUDA; for CPU-only sparse processing,
 set `dense: false` and `mesh: false` in a copied recipe.
@@ -43,6 +43,70 @@ memory, verify the Docker daemon/image, or qualify a survey. Version/container c
 also run when executing the relevant engine. Allow ample disk space: immutable
 originals, exports, derived PNGs/masks, engine inputs, databases, depth maps and
 failed attempts are retained. No automatic pruning occurs.
+
+## PyCOLMAP on Jetson ARM64
+
+PyPI's 3.12.6 release has no Linux ARM64 wheel. Build the pinned source and Python
+bindings using the [official source layout](https://github.com/colmap/colmap/tree/3.12.6/python).
+The following procedure uses the existing Ubuntu 22.04/Python 3.10 platform image
+as a build environment and produces a wheel for the host venv. Build dependencies
+stay in Docker. Keep the build directory and wheel under ignored `runs/`.
+
+```bash
+mkdir -p runs/pycolmap-build
+docker run --rm --pull=never -it --user 0 --entrypoint /bin/bash \
+  --mount "type=bind,src=$PWD/runs/pycolmap-build,dst=/build" --workdir /build \
+  drone_autonomy_platform:orin
+```
+
+Inside that container (which already supplies Boost, Eigen, Ceres, Glog, OpenBLAS,
+SQLite, GLEW, Ninja and patchelf):
+
+```bash
+apt-get update
+apt-get install -y --no-install-recommends libfreeimage-dev libmetis-dev
+# In this disposable build container only: stop CUDA Ceres headers shadowing /usr/include.
+mv /usr/local/include/ceres /usr/local/include/ceres-cuda-unused
+git clone --branch 3.12.6 --depth 1 https://github.com/colmap/colmap.git colmap
+git -C colmap rev-parse HEAD  # 4d5b60e19ad268072adaf1267d21fa38a9a828ca
+python3 -m venv --system-site-packages build-venv
+build-venv/bin/python -m pip install --upgrade 'pip==26.2.1'
+build-venv/bin/python -m pip install 'scikit-build-core==1.1.1' 'pybind11==3.0.1' 'cmake==3.31.10' 'auditwheel==6.8.2'
+
+build-venv/bin/cmake -S colmap -B native -GNinja \
+  -DCeres_DIR=/usr/lib/cmake/Ceres -DCMAKE_BUILD_TYPE=Release \
+  '-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG' -DCMAKE_INSTALL_PREFIX=/build/install \
+  -DCUDA_ENABLED=OFF -DGUI_ENABLED=OFF -DOPENGL_ENABLED=OFF -DCGAL_ENABLED=OFF \
+  -DLSD_ENABLED=OFF -DDOWNLOAD_ENABLED=OFF -DTESTS_ENABLED=OFF -DIPO_ENABLED=OFF
+build-venv/bin/cmake --build native -j3
+build-venv/bin/cmake --install native
+CMAKE_PREFIX_PATH=/build/install CMAKE_BUILD_PARALLEL_LEVEL=2 \
+  build-venv/bin/python -m pip wheel --no-build-isolation --no-deps \
+  -Ccmake.define.Ceres_DIR=/usr/lib/cmake/Ceres \
+  -Ccmake.define.GENERATE_STUBS=OFF \
+  -Ccmake.define.CMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
+  '-Ccmake.define.CMAKE_CXX_FLAGS_RELEASE=-O1 -DNDEBUG' \
+  -Cbuild-dir=/build/python-native ./colmap -w wheel
+LD_LIBRARY_PATH=/build/install/lib build-venv/bin/auditwheel repair wheel/*.whl -w repaired
+exit
+```
+
+Back on the host:
+
+```bash
+.venv/bin/python -m pip install --no-deps runs/pycolmap-build/repaired/*.whl
+.venv/bin/python -c 'import pycolmap; print(pycolmap.__version__, pycolmap.has_cuda)'
+.venv/bin/python -m pytest -q
+```
+
+Select the distro's CPU Ceres explicitly in both builds: this platform image also
+contains a separate CUDA-enabled Ceres under `/usr/local`, whose headers must also
+be isolated in the build container to match the selected library. The wheel bundles its
+native runtime libraries with auditwheel; the host needs no global compiler/devel
+package installation or `LD_LIBRARY_PATH`. This CPU build supports model IO and
+quality assessment. It does not install a host COLMAP CLI or qualify CUDA dense
+reconstruction. Reduce build parallelism if compiler memory pressure is high.
+
 
 ## Ingest and select photographs
 
