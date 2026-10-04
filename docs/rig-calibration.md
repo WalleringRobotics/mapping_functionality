@@ -80,3 +80,15 @@ The OAK-D (BW1098OBC) factory calibration has no IMU extrinsics, and the OAK ROS
 driver's `/tf_static` publishes `oak_imu_frame` only as an identity under a separate
 `oak_oak` parent, so no recorded data relates the IMU to the cameras. Only the
 camera-to-IMU solver can supply that link.
+
+## Using the calibration
+
+`wr-map sync --rig-calibration FILE` applies the OAK→PX4 time offset and the
+camera→body transform to produce camera poses; `wr-map image-accuracy
+--rig-calibration FILE` takes the antenna-to-camera lever arm, its covariance and the
+camera latency bound from it (see [MAVLink integration](mavlink-integration.md) and
+[RTK accuracy](rtk-accuracy.md)). Both reports list each link's source and treat
+`calibration-check`'s blocking items as blocking survey readiness. Offsets are added
+to the recorded exposure time (`DepthAI host-synced`, the same stamp the ROS driver
+publishes) to place it on the PX4 pose timeline, so a positive `offset_ns` means the
+OAK stamps exposures early relative to PX4.
