@@ -189,6 +189,7 @@ MAVROS service, retain unique session names and test service shutdown on the ben
 
 1. Rigidly mount OAK and PX4. Save board IDs, firmware/software versions, exposure,
    stream rates, mounting rotation and lever arm alongside the private dataset.
+   Enter mounting and lever arms in the [rig calibration file](rig-calibration.md).
    Keep the rig stationary first, then make deliberate rotations on each axis.
 2. Validate all camera/OAK-IMU/PX4 records and the sync report under the intended
    USB, storage and companion-compute load. Inspect RTT, offset residual, sampling
