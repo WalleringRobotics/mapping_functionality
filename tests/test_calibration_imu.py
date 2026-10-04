@@ -238,3 +238,47 @@ def test_cli_refuses_another_device_before_writing(tmp_path, capsys):
     assert solve_cli(session, calibration, tmp_path / "solved") == 2
     assert "Calibration is for OAK TESTDEVICE" in capsys.readouterr().err
     assert sorted(p.name for p in tmp_path.iterdir()) == ["rig.json", "session"]
+
+
+def test_refuses_nonfinite_rates_and_reordered_stamps():
+    from wallering_mapping.calibration_imu import series
+    for rows, error in [([(2, 0, 0, 0), (1, 0, 0, 0)], "increasing"),
+                        ([(1, 0, 0, 0), (2, np.nan, 0, 0)], "finite")]:
+        with pytest.raises(ValueError, match=error):
+            series(rows)
+
+
+def test_refuses_scale_mismatch():
+    oak, px4, _ = synthetic(seconds=40)
+    with pytest.raises(ValueError, match="residual"):
+        solve_gyros((oak[0], oak[1] * 2), px4)
+
+
+def test_half_turn_rotation_difference_is_not_zero():
+    from wallering_mapping.calibration_imu import rotation_vector
+    assert np.linalg.norm(rotation_vector(np.diag([1., -1., -1.]))) == pytest.approx(np.pi)
+
+
+def test_gyro_reader_checks_every_frame(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace as NS
+    from wallering_mapping import bags, calibration_imu as ci
+    oak, px4 = NS(topic=ci.OAK_TOPIC, msgtype="imu"), NS(topic=ci.PX4_TOPIC, msgtype="imu")
+    def message(frame, stamp):
+        return NS(header=NS(frame_id=frame, stamp=NS(sec=1, nanosec=stamp)),
+                  angular_velocity=NS(x=1., y=2., z=3.))
+    class Bag:
+        connections = [oak, px4]
+        def messages(self, **kwargs):
+            yield oak, 0, message("wrong", 1)
+            yield oak, 0, message(ci.OAK_IMU, 2)
+            yield px4, 0, message(ci.BODY, 1)
+            yield px4, 0, message(ci.BODY, 2)
+        def deserialize(self, raw, msgtype):
+            return raw
+    @contextmanager
+    def reader(path):
+        yield Bag()
+    monkeypatch.setattr(bags, "reader", reader)
+    with pytest.raises(ValueError, match="wrong"):
+        ci.read_gyros("unused")
