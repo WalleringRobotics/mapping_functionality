@@ -193,3 +193,63 @@ def test_session_must_be_complete_and_sealed(tmp_path):
     (tmp_path / "SHA256SUMS").write_text(f"{'0' * 64}  bag/metadata.yaml\n")
     with pytest.raises(ValueError, match="checksum mismatch"):
         cc.solve_camera_imu(tmp_path)
+
+
+def test_half_turn_discrepancy_is_not_zero():
+    assert np.linalg.norm(cc.log_so3(np.diag([1., -1., -1.]))) == pytest.approx(np.pi)
+
+
+@pytest.mark.parametrize("damage,error", [("frame", "frames"), ("duplicate", "increasing"),
+                                            ("reversal", "increasing"), ("nan", "finite")])
+def test_reader_refuses_invalid_imu_evidence(damage, error):
+    from types import SimpleNamespace as NS
+    connection = NS(topic=cc.bags.IMU, msgtype="imu")
+    class Bag:
+        connections = [connection]
+        def messages(self, **kwargs):
+            for index in range(12):
+                stamp = (index - 1 if damage == "duplicate" else index - 2) if index == 5 and damage in {"duplicate", "reversal"} else index
+                yield connection, 0, NS(header=NS(frame_id="wrong" if damage == "frame" and index == 0 else cc.OAK_IMU,
+                                                 stamp=NS(sec=1, nanosec=stamp)),
+                                        angular_velocity=NS(x=np.nan if damage == "nan" else 0., y=0., z=0.))
+        def deserialize(self, raw, msgtype):
+            return raw
+    with pytest.raises(ValueError, match=error):
+        cc.read_gyro(Bag())
+
+
+def test_frame_pairs_crossing_imu_gaps_are_refused():
+    imu = np.r_[np.arange(0., 1., .01), np.arange(2., 3., .01)]
+    rates = np.random.default_rng(0).normal(size=(len(imu), 3))
+    start = np.linspace(.1, .8, 100)
+    with pytest.raises(ValueError, match="Too few tracked frame pairs"):
+        cc.solve_rotation_offset(start, start + 1.5, np.ones((100, 3)), imu, rates)
+
+
+@pytest.mark.parametrize("secondary_mode", ["disagrees", "missing", "skipped"])
+def test_session_never_emits_entries_without_successful_cross_check(tmp_path, monkeypatch, secondary_mode):
+    import json
+    from contextlib import nullcontext
+    from types import SimpleNamespace as NS
+    (tmp_path / "state").write_text("complete\n")
+    (tmp_path / "SHA256SUMS").write_text("fixture")
+    (tmp_path / "TESTDEVICE_calibration.json").write_text(json.dumps({}))
+    monkeypatch.setattr(cc.bags, "check_seal", lambda path: ["TESTDEVICE_calibration.json"])
+    monkeypatch.setattr(cc.bags, "reader", lambda path: nullcontext(None))
+    monkeypatch.setattr(cc, "factory_camera_links", lambda oak: {cc.CAMERA_SOCKETS[2]: NS(rotation=np.eye(3))})
+    rates = np.random.default_rng(0).normal(size=(100, 3))
+    monkeypatch.setattr(cc, "read_gyro", lambda bag: (np.arange(100) * 10_000_000, rates, [cc.OAK_IMU]))
+    def solve(bag, oak, camera, *args, **kwargs):
+        if camera == "right" and secondary_mode == "missing":
+            raise ValueError("missing camera")
+        return {"rotation": np.eye(3), "rotation_sigma_rad": np.ones(3) * .001,
+                "offset_s": 0. if camera == "left" else .02, "offset_sigma_ns": 100_000,
+                "diagnostics": {"pairs_used": 100, "residual_rms_rad": .001,
+                                "excitation": {"weakest_rate_rad_s": 1.}}}
+    monkeypatch.setattr(cc, "solve_session_camera", solve)
+    if secondary_mode == "skipped":
+        result = cc.solve_camera_imu(tmp_path, cross_check_camera=False)
+        assert not result["qualified"] and not result["entries"]
+    else:
+        with pytest.raises(ValueError, match="cross-check"):
+            cc.solve_camera_imu(tmp_path)
