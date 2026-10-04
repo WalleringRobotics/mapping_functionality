@@ -90,7 +90,7 @@ def parser():
     sync.add_argument("--output", type=Path, required=True)
     sync.add_argument("--stream", choices=["rgb", "left", "right"], default="rgb")
     sync.add_argument("--min-fraction", type=float, default=.9)
-    sync.add_argument("--rig-calibration", type=Path, help="Apply camera->body transform and OAK->PX4 time offset")
+    sync.add_argument("--rig-calibration", type=Path, help="Compose diagnostic camera poses with explicit timing qualification limits")
     ntrip = commands.add_parser("ntrip", help="Forward verified fixed-base NTRIP v2 corrections through MAVROS")
     ntrip.add_argument("--config", type=Path, required=True)
     ntrip.add_argument("--output", type=Path, required=True)
@@ -101,7 +101,7 @@ def parser():
     images_accuracy.add_argument("--profile", type=Path, required=True)
     images_accuracy.add_argument("--output", type=Path, required=True)
     images_accuracy.add_argument("--project", type=Path, help="Restrict geolocation to an existing selected image export")
-    images_accuracy.add_argument("--rig-calibration", type=Path, help="Lever arm and camera latency from the rig calibration used by sync")
+    images_accuracy.add_argument("--rig-calibration", type=Path, help="Use lever arm and uncertainty from the same rig file as sync")
     map_accuracy = commands.add_parser("map-accuracy", help="Assess withheld checkpoints and reference-aware map accuracy")
     map_accuracy.add_argument("checkpoints", type=Path)
     map_accuracy.add_argument("--profile", type=Path, required=True)
@@ -163,13 +163,26 @@ def parser():
     dense.add_argument("--execute", action="store_true")
     accuracy = commands.add_parser("accuracy", help="Report independent checkpoint residuals")
     accuracy.add_argument("checkpoints", type=Path)
+    from .calibration_mission import add_arguments
+    mission = commands.add_parser("calibrate-mission", help="Generate a bounded offline QGroundControl mission draft")
+    add_arguments(mission)
+    calibration = commands.add_parser("calibrate", help="Record, solve and verify rig calibration")
+    modes = calibration.add_subparsers(dest="calibration_command", required=True)
+    for name in ("record", "solve", "camera", "mission", "phases"):
+        flat = f"calibrate-{name}"
+        if flat in commands.choices:
+            mode = modes.add_parser(name, parents=[commands.choices[flat]], add_help=False)
+            mode.set_defaults(command=flat)
     return result
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
-        if args.command == "inspect":
+        if args.command == "calibrate-mission":
+            from .calibration_mission import run
+            result = run(args)
+        elif args.command == "inspect":
             from .oak import inspect_device
             result = inspect_device(args.device_id)
         elif args.command in {"record", "capture"}:
