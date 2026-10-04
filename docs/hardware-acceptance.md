@@ -4,10 +4,47 @@ See the [command guide](hardware-commands.md) for the complete reproducible comm
 set and passive serial diagnostics, and the
 [repository skill](../skills/jetson-mapping-checks/SKILL.md) for future agent sessions.
 
-**Update 2026-10-04:** the five-second camera/PX4 collection saved intact images,
-but full readiness **fails** on timing qualification, the configured GNSS topic,
-and OAK IMU firmware. TELEM2 transport now works at 921600 baud with flow control
-off. The findings below distinguish the latest capture from earlier bench tests.
+**Update 2026-10-04:** OAK BNO086 firmware commissioning is complete: 3.2.13 was
+upgraded to 3.9.9 and both raw IMU streams now produce data. Full readiness still
+**fails**: the newly enabled IMU exposes a recorder queue overflow and accelerometer
+sequence gaps. Earlier camera/PX4 timing and configured-GNSS-topic blockers remain
+unresolved. TELEM2 transport works at 921600 baud with flow control off.
+
+## OAK IMU firmware upgrade: 2026-10-04
+
+Used the pinned DepthAI 3.10.0 SDK's bundled firmware through Luxonis's explicit
+IMU update API, with no running camera/IMU pipeline. The SDK reported completion
+at 100%; a fresh device connection then read back 3.9.9. Camera calibration JSON
+was identical before and after the update, and runtime USB remained `SUPER`.
+The [commissioning procedure](hardware-commands.md#oak-bno-imu-firmware-commissioning)
+and `deploy/update-oak-imu.py` reproduce the version checks, backup, flash and
+readback. Startup checks do not flash firmware.
+
+| Check | Result |
+|---|---|
+| Firmware | BNO086 3.2.13 → 3.9.9; matches the pinned SDK baseline after reconnect |
+| Calibration | Before/after EEPROM calibration JSON matches |
+| Default `imu=auto` startup | Host, dependency and storage checks pass; the requested 60-second camera probe aborts early with `Writer backlog exceeded queue_frames` |
+| Preserved recorder reproduction | A requested five-second capture aborts with the same queue overflow; 29 accelerometer and 29 gyroscope samples were saved, with eight accelerometer sequence gaps |
+| Isolated IMU, 10 seconds | At a requested 200 Hz, 2,000 samples from each sensor; observed rates approximately 200 Hz. Gyroscope: zero sequence gaps. Accelerometer: 518 sequence gaps |
+
+The isolated IMU test used batch threshold/max reports 20/20 and no cameras or
+dataset writer. Its accelerometer gaps therefore also occur without the recorder
+queue overflow. Luxonis documents different
+[BNO08X accelerometer and gyroscope rate steps](https://docs.luxonis.com/hardware/platform/sensors/imu/bno08x)
+and an upstream [multi-report packet loss issue](https://github.com/luxonis/depthai-core/issues/585).
+The observed pattern is consistent with that issue, but its cause has not been
+proved for this SDK build. Preserve gap detection and resolve report delivery
+before claiming lossless IMU capture. The application, capture rates, queue limits
+and acceptance gates were unchanged during this commissioning.
+
+Private evidence is in `runs/oak-imu-upgrade-20261004-001/`: `flash/` contains the
+firmware journal and before/after readbacks/calibration; `startup-60s.json` retains
+the failed integrated check; `capture-before-batching/` retains the failed short
+capture; `imu-probe.json` and `imu-probe-samples.jsonl` retain the isolated test.
+The firmware updater and hardware checks have 28 passing focused tests. Ruff,
+Python compilation, shell syntax and diff whitespace checks pass. This firmware
+repair does not qualify camera/IMU/PX4 survey capture.
 
 ## Five-second collection: 2026-10-04
 
@@ -45,8 +82,9 @@ coordinates stay in those private artifacts, which remain excluded from Git.
 
 ### Next steps
 
-1. Commission compatible OAK BNO086 firmware using the supported Luxonis procedure,
-   then re-run default `imu=auto` checks and verify both raw IMU streams.
+1. Firmware commissioning is now complete (see above). Resolve the recorder queue
+   overflow and raw accelerometer sequence gaps, then repeat default `imu=auto`
+   camera/IMU startup and sustained capture checks.
 2. Diagnose TIMESYNC spikes with camera load active. Compare unloaded/loaded UART
    RTT, CPU scheduling and USB contention. Keep the current 10 ms RTT, 2 ms
    residual, 501-sample qualification and 5 ms association limits for acceptance.

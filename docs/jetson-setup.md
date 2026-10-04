@@ -60,8 +60,11 @@ This checks the actual write/fsync path, host resources, binary imports, USB 3,
 BNO firmware baseline, settings readback, calibrated frames and enabled IMU streams.
 It records temporary images and removes them after validation. `imu=auto` enables
 a present IMU and fails if it cannot work; it never silently falls back to no IMU.
-The present BNO086 reports unsupported firmware 3.2.13 versus the SDK baseline
-3.9.9. Commission that firmware separately before enabling IMU recording.
+For BNO085/BNO086 firmware mismatches, use the separate
+[IMU commissioning procedure](hardware-commands.md#oak-bno-imu-firmware-commissioning)
+before enabling IMU recording. The bench BNO086 was upgraded from 3.2.13 to the
+SDK baseline 3.9.9 on 2026-10-04, with firmware and calibration verified after
+reconnecting. Recheck each device rather than assuming it shares this baseline.
 
 During a recording use `wr-map status SESSION` from another terminal; a
 heartbeat older than 15 seconds is flagged stale. The heartbeat includes counts,

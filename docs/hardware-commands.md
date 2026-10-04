@@ -49,6 +49,40 @@ devices and supplementary groups. `inspect` opens the OAK and now includes IMU
 firmware versions. It needs exclusive camera ownership. Pre-boot USB speed is
 not the negotiated speed after DepthAI opens the camera.
 
+## OAK BNO IMU firmware commissioning
+
+Firmware commissioning is an explicit maintenance step. Stop the camera owner,
+keep the OAK powered and connected throughout the update, and use the pinned
+`.venv` SDK. The separate updater calls Luxonis's
+[`startIMUFirmwareUpdate` / `getIMUFirmwareUpdateStatus` API](https://docs.luxonis.com/software-v3/depthai/api/cpp)
+without starting an IMU pipeline. It targets only BNO085/BNO086 IMU firmware;
+startup checks remain read-only with respect to firmware.
+
+Read the device ID, installed version and SDK's embedded version with `inspect`.
+For the commissioned BNO086, the supported upgrade was 3.2.13 to the DepthAI
+3.10.0 bundle's 3.9.9. Substitute the inspected ID below; keep it in private
+reports. Omit `--apply` for inspection only, using a different output directory.
+
+```bash
+.venv/bin/wr-map inspect
+.venv/bin/python deploy/update-oak-imu.py --device-id DEVICE_ID \
+  --from-version 3.2.13 --to-version 3.9.9 \
+  --output runs/oak-imu-upgrade-001 --apply
+
+bash deploy/check-hardware.sh --require-jetson --device-id DEVICE_ID \
+  --config configs/oakd-survey.json --camera-seconds 60 \
+  --output-root runs --report runs/oak-imu-startup-001.json
+```
+
+The updater checks the reviewed device and versions, saves calibration before
+flashing, journals progress, and requires both SDK completion at 100% and firmware
+readback after reconnect. It also compares calibration before/after. A camera
+already at the target is not reflashed. Evidence directories are never replaced.
+Do not interrupt an active flash or run it under a process timeout. If the SDK
+reports failure, retain its evidence and diagnose before attempting another write.
+The follow-up capture must report both accelerometer and gyroscope data with
+`imu=auto`; firmware readback alone does not establish working sensor streams.
+
 ## Startup and processing checks
 
 ```bash

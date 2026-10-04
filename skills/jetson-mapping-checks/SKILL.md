@@ -41,6 +41,11 @@ reports in `runs/` with new names. Reports deliberately refuse replacement.
 - `imu=auto` enables a detected IMU. A failed IMU is a failed survey setup. Use
   the explicit camera-only diagnostic profile to isolate image capture and label
   that result accordingly. Firmware commissioning is separate from startup probes.
+  When an IMU firmware upgrade is requested, use the
+  [commissioning procedure](../../docs/hardware-commands.md#oak-bno-imu-firmware-commissioning)
+  and `deploy/update-oak-imu.py` with the inspected device ID and versions. Keep
+  power connected until completion; verify firmware after reconnect, unchanged
+  calibration, and both raw IMU streams during camera capture.
 - Run the passive serial probe only after stopping the UART's existing owner.
   It changes host baud settings and reads bytes; it must not send flight commands
   or modify PX4 parameters. Use `--baud 115200` for a 115.2 kbaud test, or a bounded
