@@ -212,7 +212,8 @@ def run(args):
     if len(fence) != 1 or fence[0].get("inclusion") is not True:
         raise ValueError("Expected the generator's single inclusion-circle fence")
     circle = fence[0]["circle"]
-    fence_items = [{"seq": 0, "frame": 0, "command": 5003, "autocontinue": 1,
+    # PX4's fence storage has no autocontinue field; downloads consistently expose0.
+    fence_items = [{"seq": 0, "frame": 0, "command": 5003, "autocontinue": 0,
                     "params": [circle["radius"], 0, 0, 0, *circle["center"], 0]}]
     output = args.output.resolve()
     if args.plan.resolve().is_relative_to(output) or build.is_relative_to(output):
