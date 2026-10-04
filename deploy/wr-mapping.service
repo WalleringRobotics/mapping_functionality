@@ -8,6 +8,7 @@ Type=simple
 User=wr-mapping
 SupplementaryGroups=plugdev
 WorkingDirectory=/opt/wallering/mapping_functionality
+EnvironmentFile=-/etc/wallering-mapping.env
 ExecStart=/bin/bash /opt/wallering/mapping_functionality/deploy/record-session.sh
 KillSignal=SIGTERM
 TimeoutStopSec=90
@@ -17,4 +18,3 @@ NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target
-

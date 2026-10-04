@@ -8,7 +8,7 @@
     "timesync": "/mavros/timesync_status",
     "time_reference": "/mavros/time_reference"
   },
-  "time_node": "/mavros/uas_1/time",
+  "time_node": "/mavros/time",
   "required": [
     "state",
     "imu_raw",

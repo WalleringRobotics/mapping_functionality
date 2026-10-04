@@ -34,6 +34,20 @@ def parser():
     doctor.add_argument("--probe-device", action="store_true")
     doctor.add_argument("--device-id")
     doctor.add_argument("--backend", choices=["building", "terrain"], default="building")
+    hardware = commands.add_parser("hardware-check", help="Run bounded hardware startup probes")
+    hardware.add_argument("--mode", choices=["capture", "building", "terrain"], default="capture")
+    hardware.add_argument("--config", type=Path, default=Path("configs/oakd-survey.json"))
+    hardware.add_argument("--output-root", type=Path, required=True)
+    hardware.add_argument("--require-jetson", action="store_true")
+    hardware.add_argument("--require-mount", type=Path)
+    hardware.add_argument("--telemetry-config", type=Path)
+    hardware.add_argument("--gnss-profile", type=Path)
+    hardware.add_argument("--device-id")
+    hardware.add_argument("--serial-device", type=Path)
+    hardware.add_argument("--camera-seconds", type=positive, default=5)
+    hardware.add_argument("--telemetry-seconds", type=positive, default=75)
+    hardware.add_argument("--min-memory-gib", type=positive, default=1)
+    hardware.add_argument("--report", type=Path)
     status = commands.add_parser("status", help="Read the recorder's current status")
     status.add_argument("session", type=Path)
     simulate = commands.add_parser("simulate", help="Create an IO fixture without hardware")
@@ -115,6 +129,26 @@ def main(argv=None):
             result = doctor(args.mode, args.output_root, config, args.probe_device,
                             args.device_id, args.backend)
             print(json.dumps(result, indent=2))
+            return 0 if result["ready"] else 2
+        elif args.command == "hardware-check":
+            from .hardware import hardware_check
+            from .telemetry_config import TelemetryConfig
+            if args.mode != "capture" and (args.telemetry_config or args.gnss_profile or args.device_id):
+                raise ValueError("Camera/telemetry options require --mode capture")
+            result = hardware_check(
+                args.mode, args.output_root,
+                CaptureConfig.read(args.config) if args.mode == "capture" else None,
+                require_jetson=args.require_jetson, required_mount=args.require_mount,
+                telemetry_config=TelemetryConfig.read(args.telemetry_config) if args.telemetry_config else None,
+                gnss_profile=args.gnss_profile, device_id=args.device_id,
+                camera_seconds=args.camera_seconds, telemetry_seconds=args.telemetry_seconds,
+                min_memory_gib=args.min_memory_gib, serial_device=args.serial_device)
+            encoded = json.dumps(result, indent=2) + "\n"
+            if args.report:
+                # Never replace an earlier acceptance report or a deployment config.
+                with args.report.open("x") as report:
+                    report.write(encoded)
+            print(encoded, end="")
             return 0 if result["ready"] else 2
         elif args.command == "status":
             from .operations import status
