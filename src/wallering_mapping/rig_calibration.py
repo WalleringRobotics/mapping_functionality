@@ -337,3 +337,20 @@ def consistency(calibration):
         result["consistent_3_sigma"] = (angle <= 3 * result["rotation_sigma_rad"]
                                         and distance <= 3 * result["translation_sigma_m"])
     return result
+
+
+def apply_entries(data, entries):
+    """Copy of calibration data with matching transform/offset entries replaced and re-validated."""
+    result = copy.deepcopy(data)
+    for entry in entries:
+        if "parent" in entry:
+            section, key = "transforms", ("parent", "child")
+        else:
+            section, key = "time_offsets", ("clock", "reference")
+        matches = [i for i, old in enumerate(result[section])
+                   if all(old.get(k) == entry[k] for k in key)]
+        if len(matches) != 1:
+            raise ValueError(f"Calibration has no single {section} entry for {[entry[k] for k in key]}")
+        result[section][matches[0]] = copy.deepcopy(entry)
+    RigCalibration(result)
+    return result
