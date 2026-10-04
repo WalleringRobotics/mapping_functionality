@@ -12,7 +12,7 @@ def products():
     raster = {**common, "size": [100, 100], "pixel_size_m": [1, 1],
               "bands": [{"statistics": [100, 110, 105, 2], "valid_percent": 75}]}
     return {"rasters": [copy.deepcopy(raster), copy.deepcopy(raster)],
-            "cloud": {**common, "points": 10, "decoded_points": 10}}
+            "cloud": {**common, "points": 10, "decoded_points": 10, "bounds_z": [100, 110]}}
 
 
 def test_consistent_metric_terrain_products():
@@ -32,6 +32,7 @@ def test_consistent_metric_terrain_products():
     ("spacing", "pixel spacing"),
     ("nodata", "finite valid data"),
     ("infinite", "finite valid data"),
+    ("height", "heights must be finite"),
     ("truncated", "empty or incomplete"),
 ])
 def test_invalid_terrain_products(failure, reason):
@@ -55,5 +56,7 @@ def test_invalid_terrain_products(failure, reason):
         raster["bands"][0]["statistics"][0] = float("inf")
     elif failure == "truncated":
         report["cloud"]["decoded_points"] = 9
+    elif failure == "height":
+        report["cloud"]["bounds_z"][0] = float("nan")
     with pytest.raises(ValueError, match=reason):
         validate_products(report)

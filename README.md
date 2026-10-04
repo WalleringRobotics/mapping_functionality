@@ -127,7 +127,7 @@ available. The [processing guide](docs/postprocessing.md) covers optional COLMAP
 installation and the native ODM workflow for ordinary geotagged photos.
 Recorded IMU and stereo images are preserved but are not yet consumed
 as rig/VIO constraints. Qualified MAVROS RTK camera geolocation is available for
-terrain; `georeference` aligns building models and PLY products to metric projected
+terrain; `georeference` aligns COLMAP models and PLY products to metric projected
 coordinates. Navigation alignment does not establish surface accuracy. Live SLAM
 and tightly coupled visual-inertial/rig bundle adjustment remain future work.
 

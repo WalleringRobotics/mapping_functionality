@@ -14,6 +14,8 @@ def validate_products(report):
     """Require readable, nonempty products sharing a metric projected CRS."""
     from pyproj import CRS
 
+    if len(report["rasters"]) < 2:
+        raise ValueError("ODM needs an orthophoto and DSM raster")
     products = [*report["rasters"], report["cloud"]]
     reference = None
     bounds = []
@@ -52,6 +54,10 @@ def validate_products(report):
     cloud = report["cloud"]
     if cloud["points"] <= 0 or cloud["decoded_points"] != cloud["points"]:
         raise ValueError("ODM point cloud is empty or incomplete")
+    heights = cloud["bounds_z"]
+    if (len(heights) != 2 or not all(math.isfinite(v) for v in heights)
+            or heights[0] > heights[1]):
+        raise ValueError("ODM point-cloud heights must be finite and ordered")
     return {**report, "valid": True, "horizontal_crs": reference.to_string(),
             "accuracy_claim": "File/CRS consistency only; independent checkpoints still required"}
 
@@ -79,7 +85,8 @@ def inspect_products(site, dtm=False):
         bands = []
         for index in range(1, dataset.RasterCount + 1):
             band = dataset.GetRasterBand(index)
-            # Exact upstream statistics decode the raster and refuse all-nodata.
+            # Exact upstream statistics decode the raster, respecting validity
+            # masks (including alpha), and refuse all-nodata/all-transparent data.
             statistics = band.ComputeStatistics(False)
             valid = float(band.GetMetadataItem("STATISTICS_VALID_PERCENT") or 0)
             bands.append({"statistics": statistics, "valid_percent": valid})
@@ -91,14 +98,27 @@ def inspect_products(site, dtm=False):
                                       max(p[0] for p in corners), max(p[1] for p in corners)]})
         dataset = None
     name = "odm_georeferencing/odm_georeferenced_model.laz"
-    pipeline = pdal.Reader.las(filename=str(site / name)).pipeline()
+    pipeline = pdal.Pipeline(json.dumps([
+        {"type": "readers.las", "filename": str(site / name)},
+        {"type": "filters.stats", "dimensions": "X,Y,Z"},
+    ]))
     summary = pipeline.quickinfo["readers.las"]
-    box = summary["bounds"]
     # Streaming decoding checks compressed payloads without retaining all points.
     decoded = pipeline.execute_streaming(chunk_size=65536)
+    # LAS header bounds are not evidence of the decoded point coordinates.
+    statistics = {item["name"]: item for item in
+                  pipeline.metadata["metadata"]["filters.stats"]["statistic"]}
+    for axis in ("X", "Y", "Z"):
+        values = statistics[axis]
+        if values["count"] != decoded or not all(
+            math.isfinite(values[key]) for key in ("minimum", "maximum", "average")
+        ):
+            raise ValueError("ODM point cloud contains invalid decoded coordinates")
     cloud = {"path": name, "points": summary["num_points"], "decoded_points": decoded,
              "crs_wkt": summary["srs"]["wkt"],
-             "bounds_xy": [box["minx"], box["miny"], box["maxx"], box["maxy"]]}
+             "bounds_xy": [statistics["X"]["minimum"], statistics["Y"]["minimum"],
+                           statistics["X"]["maximum"], statistics["Y"]["maximum"]],
+             "bounds_z": [statistics["Z"]["minimum"], statistics["Z"]["maximum"]]}
     return validate_products({"rasters": rasters, "cloud": cloud,
                               "versions": {"gdal": gdal.VersionInfo(), "pdal": pdal.__version__}})
 

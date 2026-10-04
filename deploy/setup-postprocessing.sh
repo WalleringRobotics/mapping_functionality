@@ -25,10 +25,16 @@ if [[ $# -eq 0 ]]; then
   docker pull "$processing_image"
 fi
 "$processing_venv/bin/python" -c 'import cv2, numpy, pyproj, rosbags; import wallering_mapping.cli'
-[[ "$(docker image inspect "$processing_image" --format '{{.Os}}/{{.Architecture}}')" == linux/amd64 ]] || {
-  echo "The installed ODM image must be linux/amd64." >&2; exit 2;
-}
-docker run --rm --network none "$processing_image" --version
-docker image inspect "$processing_image" --format 'ODM image: {{.Id}}'
+# Reuse execution's architecture, version and upstream interface checks. A local
+# tag alone does not establish that the expected engine is installed.
+"$processing_venv/bin/python" - "$processing_image" <<'PY'
+import sys
+from wallering_mapping.opensfm import resolve_engine
+
+engine = resolve_engine(sys.argv[1])
+print(engine["version_output"])
+print("ODM image:", engine["id"])
+print("OpenSfM revision:", engine["opensfm_revision"])
+PY
 echo "Ready. Activate with: source $processing_venv/bin/activate"
 echo "Then use configs/process-opensfm.json or configs/process-terrain.json."

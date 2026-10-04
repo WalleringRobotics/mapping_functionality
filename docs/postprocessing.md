@@ -222,7 +222,32 @@ centres to align a selected COLMAP model and its PLY products. Follow the
 [RTK workflow](rtk-accuracy.md#buildingsobjects) for calibration, geometry gates,
 product selection and the stored local-origin convention.
 
-## Terrain recipe and control inputs
+## Ordinary geotagged photographs with native ODM
+
+For conventional drone photographs that already contain camera and GPS EXIF,
+use the [official ODM Docker workflow](https://github.com/OpenDroneMap/ODM/blob/v3.6.2/README.md#quickstart).
+Copy the original JPEGs/TIFFs into `/data/odm/site-001/images/`, keeping their EXIF
+and a separate original backup. On the x86-64 processing workstation:
+
+```bash
+docker run --rm --network none --user "$(id -u):$(id -g)" --env HOME=/tmp \
+  --mount type=bind,src=/data/odm,dst=/datasets \
+  opendronemap/odm:3.6.2 --project-path /datasets --max-concurrency 4 \
+  --dsm --orthophoto-resolution 2 --dem-resolution 5 site-001
+```
+
+ODM reads the original EXIF, estimates camera calibration and writes its normal
+orthophoto, elevation, point-cloud and model directories under
+`/data/odm/site-001/`. Resolutions are centimetres per pixel; choose them to suit the
+photographs. Inspect the actual CRS and height reference, and use measured control
+and independent checkpoints when accuracy matters. Ordinary GPS EXIF is a camera
+position prior, not centimetre-accuracy evidence. Native ODM manages its own stage
+outputs; this command does not create this repository's sealed workflow journal.
+
+The calibrated OAK workflow below starts from a verified imported recording and
+requires explicit geolocation/control because its derived PNGs carry no GPS EXIF.
+
+## Calibrated OAK terrain recipe and control inputs
 
 `configs/process-terrain.json` requires **GCP observations or camera geolocation**,
 plus `--vertical-datum`. Inputs use original selected image names and original image
@@ -272,8 +297,9 @@ wr-map process /data/sessions/terrain-001 --config configs/process-terrain.json 
 Use `--geo FILE` instead of or alongside `--gcp FILE`. Supply consistent horizontal
 and vertical references. The height label is recorded, **not transformed**: do not
 mix ellipsoidal and orthometric heights. Confirm actual output GeoTIFF CRS, bounds,
-height convention and nodata in GIS before delivery; the current gate checks product
-existence/hashes and registration, not independent raster/geodetic correctness.
+height convention and nodata in GIS before delivery. Automated checks establish
+decoding, valid masks, finite coordinates, common horizontal CRS and overlapping
+extents; independent raster/geodetic accuracy still requires measured checkpoints.
 
 ### Calibration handling
 

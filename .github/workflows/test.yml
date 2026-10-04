@@ -112,9 +112,9 @@ jobs:
           docker run --rm --network none --user "$(id -u):$(id -g)" \
             --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1 \
             --mount "type=bind,src=$PWD/runs/ci-odm/site,dst=/site,readonly" \
-            --mount "type=bind,src=$PWD/src/wallering_mapping/odm_products.py,dst=/inspect.py,readonly" \
+            --mount "type=bind,src=$PWD/src/wallering_mapping/odm_products.py,dst=/inspect-products.py,readonly" \
             --entrypoint /code/venv/bin/python3 opendronemap/odm:3.6.2 \
-            /inspect.py /site > runs/ci-odm/product-validation.json
+            /inspect-products.py /site > runs/ci-odm/product-validation.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -16,6 +16,12 @@ sitl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sitl)
 
 
+def test_received_mavlink_binary_payloads_and_unknown_values_survive_json():
+    source = {"data": bytearray([0, 127, 255]), "nested": [{"params": [1., float("nan")]}]}
+    encoded = json.dumps(sitl.json_value(source), allow_nan=False)
+    assert json.loads(encoded) == {"data": [0, 127, 255], "nested": [{"params": [1., None]}]}
+
+
 @pytest.fixture
 def plan(tmp_path):
     path = tmp_path / "calibration.plan"
@@ -56,6 +62,17 @@ def test_download_coordinates_require_integer_mavlink_precision(plan):
     items = sitl.mission_items(plan)
     changed = copy.deepcopy(items)
     changed[0]["params"][4] += 1e-6  # about11cm: cannot use a generic float tolerance
+    with pytest.raises(ValueError, match="parameter"):
+        sitl.check_download(items, changed)
+
+
+def test_px4_canonical_yaw_preserves_the_same_heading(plan):
+    items = sitl.mission_items(plan)
+    changed = copy.deepcopy(items)
+    index = next(i for i, item in enumerate(items) if item["params"][3] == -90)
+    changed[index]["params"][3] = 270
+    sitl.check_download(items, changed)
+    changed[index]["params"][3] = 260
     with pytest.raises(ValueError, match="parameter"):
         sitl.check_download(items, changed)
 

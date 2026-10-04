@@ -22,6 +22,17 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def json_value(value):
+    """Preserve binary MAVLink fields and unspecified floating parameters in JSON."""
+    if isinstance(value, dict):
+        return {key: json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, bytes, bytearray)):
+        return [json_value(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 def require_isolation():
     if not Path("/.dockerenv").exists():
         raise ValueError("SITL harness requires a dedicated Docker container")
@@ -84,7 +95,15 @@ def check_download(expected, actual):
             raise ValueError(f"Downloaded mission item identity differs at {before['seq']}")
         for index, (a, b) in enumerate(zip(before["params"], after["params"])):
             tolerance = 1e-7 if index in {4, 5} and before["frame"] in {0, 3, 10} else 1e-4
-            if (a is None) != (b is None) or (a is not None and abs(a - b) > tolerance):
+            if (a is None) != (b is None):
+                raise ValueError(f"Downloaded mission parameter differs at {before['seq']}")
+            if a is None:
+                continue
+            difference = a - b
+            if index == 3 and before["command"] in {16, 21, 22}:
+                # Upstream PX4 stores navigation yaw in [0, 2*pi), so -90 returns as270.
+                difference = (difference + 180) % 360 - 180
+            if abs(difference) > tolerance:
                 raise ValueError(f"Downloaded mission parameter differs at {before['seq']}")
 
 
@@ -112,10 +131,7 @@ class Link:
             self.latest[message.get_type()] = message
             if message.get_type() == "MISSION_ITEM_REACHED":
                 self.reached.add(message.seq)
-            row = message.to_dict()
-            # MAVLink NaNs denote unspecified parameters; JSON stores them as null.
-            row = {k: None if isinstance(v, float) and not math.isfinite(v) else v
-                   for k, v in row.items()}
+            row = json_value(message.to_dict())
             self.events.write(json.dumps({"received_monotonic_s": now, "message": row},
                                          allow_nan=False) + "\n")
         return message
@@ -304,7 +320,8 @@ def run(args):
                 process.wait(timeout=5)
         report["artifacts"] = {str(p.relative_to(output)): sha256(p)
                                for p in sorted(output.rglob("*")) if p.is_file() and not p.is_symlink()}
-        (output / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+        (output / "report.json").write_text(json.dumps(json_value(report), indent=2,
+                                                     allow_nan=False) + "\n")
     print(json.dumps({"passed": report["passed"], "output": str(output),
                       "error": report.get("error")}))
     return 0 if report["passed"] else 2
