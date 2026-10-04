@@ -96,3 +96,36 @@ applied here, and this explicitly blocks survey readiness. Unknown factory
 camera-to-camera covariance is preserved and also blocks RGB/right qualification.
 The accuracy profile must still supply measured exposure latency and vehicle
 attitude bounds; mounting sigma and gyro lag sigma do not substitute for them.
+
+## IMU-to-IMU solver
+
+```bash
+.venv/bin/wr-map calibrate-solve runs/<calibration-session> \
+  --calibration runs/rig-calibration/rig.json --output runs/rig-calibration/solve-001
+```
+
+Both IMUs are on one rigid body, so their angular rates differ only by the mounting
+rotation, constant biases and the clock offset. The solver interpolates the OAK gyro
+(`/oak/imu/data`) onto PX4 stamps (`/mavros/imu/data_raw`) for each candidate offset,
+fits the rotation in closed form (Kabsch on bias-centred rates), and keeps the offset
+with the lowest residual (2 ms grid, 0.1 ms refinement, parabolic interpolation). It
+writes a *new* calibration (`base_link -> oak_imu_frame` and the `oak_ros_stamp ->
+px4_ros_stamp` offset, both `estimated`) and a report; the input file is not modified.
+
+- **Uncertainty:** standard error across four independent segments (floors 0.1 ms,
+  0.002 rad). The final quarter is held out: a fit of the earlier three quarters must
+  agree with it within 4·σ_segment·√(1 + 1/n), or the solve is refused and nothing is
+  written. The accepted result is the full-data fit.
+- **Integrity:** the session must be `complete` and its `SHA256SUMS` seal must verify
+  before any data is read; the seal's hash is recorded as evidence. Device identity is
+  checked before solving, and the output directory appears only once complete.
+- **Refusals:** a principal rotation axis below 0.3 rad/s RMS (rotate about every axis),
+  fewer than two well-excited segments, an offset at the search limit, or a reflection
+  fitting far better than a rotation (an IMU axis/handedness convention error).
+- **Gaps:** OAK gaps over 50 ms are skipped, not interpolated, and counted in
+  `skipped_for_oak_gaps`.
+- **Translation** is not observable from gyros. If the file has a hand-measured camera
+  position, the IMU position is taken from it with a 0.03 m housing bound added;
+  otherwise its uncertainty stays unknown.
+- **Meaning:** the offset relates OAK and PX4 *timestamps*. It includes any difference in
+  sensor filtering delay and does not measure exposure timing (#14).

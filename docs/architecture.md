@@ -6,7 +6,7 @@ The first useful deliverable is an auditable OAK-D dataset on Orin Nano: photogr
 inertial measurements, calibration and enough metadata to reprocess later. A failed
 capture must be recognizable before leaving the site. Reconstruction runs offline.
 
-The bench uses IMX378 RGB, OV9282 mono cameras and a BNO086 on Orin Nano Super.
+The bench uses IMX378 RGB, OV9282 mono cameras and a BNO086 on Orin Nano Super. See the [OAK-D hardware reference](oak-d-hardware.md) for native rates and timing.
 Runtime inspection remains mandatory for each device. Standard OAK-D specifications are a reference, not a substitute
 for inspecting the connected device [R1](references.md).
 
@@ -32,7 +32,7 @@ flowchart TD
 | Official ROS drivers + rosbag2 MCAP | Proven recording, replay and ROS tooling | ROS headers omit hardware sequence counters and separate IMU timestamps |
 | Full-FOV images without rectification | Preserve native geometry for recalibration | More USB bandwidth than encoded video |
 | Raw images in indexed MCAP; PNG import offline | Removes image encoding from acquisition | About 4.4 GiB/min at the commissioned settings |
-| 100 Hz IMU request and 2 fps images | Commission a bounded baseline | Actual rates and continuity still require measurement |
+| 200 Hz native gyro (`LINEAR_INTERPOLATE_ACCEL`, accel 250 Hz) and 2 fps images | True gyro timestamps without decimation ([OAK-D reference](oak-d-hardware.md)) | Sample loss at 200 Hz under investigation (#18) |
 | Fixed exposure, gain, white balance, focus | Avoid focus-dependent calibration changes and auto-exposure motion blur | Requires tuning to scene lighting/distance |
 | Independent camera streams | Preserve unmatched frames and timing evidence | Initial reconstruction uses one camera at a time |
 | SfM as primary geometry source | Moving around the scene provides a longer baseline than onboard stereo | Stereo remains useful for near-field experiments |
