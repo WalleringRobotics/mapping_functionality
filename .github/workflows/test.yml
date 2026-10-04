@@ -102,6 +102,22 @@ jobs:
           git -C /tmp/wr-odm-example checkout --detach FETCH_HEAD
           mkdir -p runs/ci-odm/site
           cp -a /tmp/wr-odm-example/images runs/ci-odm/site/images
+          cp /tmp/wr-odm-example/LICENSE runs/ci-odm/SOURCE-LICENSE
+          .venv-postprocess/bin/python - <<'PY'
+          import hashlib, json, subprocess
+          from pathlib import Path
+          root = Path('runs/ci-odm')
+          provenance = {
+              'source': 'https://github.com/pierotofy/drone_dataset_brighton_beach',
+              'revision': '9506a9bf09c9678b7d0b80b014af5b606c8a7255',
+              'image': json.loads(subprocess.check_output([
+                  'docker', 'image', 'inspect', 'opendronemap/odm:3.6.2']))[0]['Id'],
+              'images_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                for p in sorted((root / 'site/images').iterdir())},
+              'qualification': 'Public example software test; EXIF GPS only, no independent accuracy claim',
+          }
+          (root / 'source.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          PY
           docker run --rm --network none --user "$(id -u):$(id -g)" \
             --env HOME=/tmp --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1 \
             --mount "type=bind,src=$PWD/runs/ci-odm,dst=/datasets" \
@@ -125,6 +141,14 @@ jobs:
             runs/ci-opensfm/**/quality.json
             runs/ci-opensfm/**/run.json
             runs/ci-opensfm/**/logs/*.log
+            runs/ci-opensfm/**/dataset/reconstruction.json
+            runs/ci-opensfm/**/dataset/reconstruction.ply
+            runs/ci-opensfm/**/dataset/undistorted/depthmaps/merged.ply
             runs/ci-odm/engine.log
             runs/ci-odm/product-validation.json
+            runs/ci-odm/source.json
+            runs/ci-odm/SOURCE-LICENSE
             runs/ci-odm/site/opensfm/reconstruction.json
+            runs/ci-odm/site/odm_orthophoto/odm_orthophoto.tif
+            runs/ci-odm/site/odm_dem/dsm.tif
+            runs/ci-odm/site/odm_georeferencing/odm_georeferenced_model.laz

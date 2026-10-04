@@ -101,7 +101,7 @@ def check_download(expected, actual):
                 continue
             difference = a - b
             if index == 3 and before["command"] in {16, 21, 22}:
-                # Upstream PX4 stores navigation yaw in [0, 2*pi), so -90 returns as270.
+                # Upstream PX4 stores navigation yaw in [0, 2*pi), so -90 returns as 270.
                 difference = (difference + 180) % 360 - 180
             if abs(difference) > tolerance:
                 raise ValueError(f"Downloaded mission parameter differs at {before['seq']}")
@@ -212,7 +212,7 @@ def run(args):
     if len(fence) != 1 or fence[0].get("inclusion") is not True:
         raise ValueError("Expected the generator's single inclusion-circle fence")
     circle = fence[0]["circle"]
-    # PX4's fence storage has no autocontinue field; downloads consistently expose0.
+    # PX4's fence storage has no autocontinue field; downloads consistently expose 0.
     fence_items = [{"seq": 0, "frame": 0, "command": 5003, "autocontinue": 0,
                     "params": [circle["radius"], 0, 0, 0, *circle["center"], 0]}]
     output = args.output.resolve()
@@ -337,5 +337,5 @@ if __name__ == "__main__":
     parser.add_argument("--timeout", type=float, default=900)
     arguments = parser.parse_args()
     if not 60 <= arguments.timeout <= 1800:
-        parser.error("--timeout must be between60 and1800 seconds")
+        parser.error("--timeout must be between 60 and 1800 seconds")
     raise SystemExit(run(arguments))

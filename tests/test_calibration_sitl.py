@@ -61,7 +61,7 @@ def test_download_refuses_coordinate_or_unspecified_yaw_changes(plan, value):
 def test_download_coordinates_require_integer_mavlink_precision(plan):
     items = sitl.mission_items(plan)
     changed = copy.deepcopy(items)
-    changed[0]["params"][4] += 1e-6  # about11cm: cannot use a generic float tolerance
+    changed[0]["params"][4] += 1e-6  # about 11 cm: cannot use a generic float tolerance
     with pytest.raises(ValueError, match="parameter"):
         sitl.check_download(items, changed)
 
