@@ -34,6 +34,10 @@ def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=Fa
     store = get_typestore(Stores.ROS2_HUMBLE)
     t = store.types
     zero = np.zeros(9)
+    # Emit the IMU at the profile's requested gyro rate (messages per 10 ms step).
+    from ruamel.yaml import YAML
+    profile = YAML(typ='safe').load((REPO / 'configs/oakd-ros.yaml').read_text())
+    imu_per_step = profile['/oak']['ros__parameters']['imu']['i_gyro_freq'] // 100
     def header(ns, frame):
         return t['std_msgs/msg/Header'](t['builtin_interfaces/msg/Time'](
             ns // 10**9, ns % 10**9), frame)
@@ -64,11 +68,13 @@ def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=Fa
                     conn = conns[topic.replace('image_raw', 'camera_info')]
                     writer.write(conn, ns, store.serialize_cdr(info, info.__msgtype__))
             if IMU != missing and (not short or i < 50):
-                msg = t['sensor_msgs/msg/Imu'](header(ns, 'imu'),
-                    t['geometry_msgs/msg/Quaternion'](0.,0.,0.,1.), zero,
-                    t['geometry_msgs/msg/Vector3'](0.,0.,0.), zero,
-                    t['geometry_msgs/msg/Vector3'](0.,0.,9.81), zero)
-                writer.write(conns[IMU], ns, store.serialize_cdr(msg, msg.__msgtype__))
+                for k in range(imu_per_step):
+                    imu_ns = ns + k * 10_000_000 // imu_per_step
+                    msg = t['sensor_msgs/msg/Imu'](header(imu_ns, 'imu'),
+                        t['geometry_msgs/msg/Quaternion'](0.,0.,0.,1.), zero,
+                        t['geometry_msgs/msg/Vector3'](0.,0.,0.), zero,
+                        t['geometry_msgs/msg/Vector3'](0.,0.,9.81), zero)
+                    writer.write(conns[IMU], imu_ns, store.serialize_cdr(msg, msg.__msgtype__))
     seal(root)
     return root
 
@@ -141,7 +147,8 @@ def test_clean_bag_with_truncated_camera_tail_is_not_capture_ready(tmp_path):
     assert report['valid'], report['errors']
     assert not report['capture_ready']
     assert not report['coverage_complete']
-    assert report['topics'][CAMERAS['right']]['last_receipt_gap_seconds'] == 2.5
+    # The bag ends with the final IMU sample, one IMU period after the last 10 ms step.
+    assert report['topics'][CAMERAS['right']]['last_receipt_gap_seconds'] == pytest.approx(2.5, abs=0.01)
 
 
 def test_shutdown_drain_is_outside_acquisition_coverage_window(tmp_path):
