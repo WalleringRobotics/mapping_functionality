@@ -12,20 +12,21 @@ sessions through these workflows.
 
 ## Python environment
 
+Prepare the host and build the image as in [Jetson setup](jetson-setup.md#fresh-orin).
+The image provides ROS, the `oak`, `terrain`, `diagnostics`, `dev` extras and
+PyCOLMAP 3.12.6; `deploy/run-platform-command.sh` runs checkout code in it:
+
 ```bash
-sudo apt-get install python3-venv libusb-1.0-0 usbutils
-python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install --upgrade pip 'setuptools>=68,<80' wheel
-.venv/bin/python -m pip install -e '.[oak,terrain,diagnostics,dev]'
 mkdir -p runs
+bash deploy/run-platform-command.sh python -m wallering_mapping.cli --help
 ```
 
-The `diagnostics` extra supplies pinned pyserial/pymavlink for passive serial
-checks. ROS comes from the host deployment or existing platform image, not pip.
-The processing extra, `.[processing]`, requires pycolmap 3.12.6; this bench had no
-compatible ARM64 wheel. Install it on a supported processing host or qualify a
-source build. The repository's Python CLI also works as
-`.venv/bin/python -m wallering_mapping.cli`.
+A host venv remains useful for quick portable checks, without ROS or PyCOLMAP:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[oak,terrain,diagnostics,dev]'
+```
 
 ## Host and device inventory
 
@@ -114,8 +115,8 @@ bash deploy/check-hardware.sh --mode terrain --output-root runs
 
 These probes return 0 on requested readiness, 2 on failure. They store temporary
 images on the chosen filesystem and remove them after validation. The platform
-wrapper uses `drone_autonomy_platform:orin`, the checkout's venv, and DDS domain 1;
-override `WR_PLATFORM_IMAGE` or `ROS_DOMAIN_ID` for a different deployment. It
+wrapper uses `wallering-mapping:humble`, the checkout's source, and DDS domain 1;
+override `WR_MAPPING_IMAGE` or `ROS_DOMAIN_ID` for a different deployment. It
 subscribes to an existing MAVROS connector. Reports must be inside the checkout to
 survive that temporary container. See `hardware-check --help` for memory, duration,
 camera-ID and required-mount options. For a dedicated disk, use
@@ -348,14 +349,9 @@ MAVROS launch. It uses normal MAVROS link traffic; unlike the passive probe, it
 transmits protocol messages. Timeout exit 124 is expected after 30 seconds.
 
 ```bash
-serial_group="$(stat -c %g /dev/ttyUSB0)"
-docker run --rm --network host --ipc host --entrypoint /bin/bash \
-  --device /dev/ttyUSB0 --group-add "$serial_group" --env ROS_DOMAIN_ID=1 \
-  drone_autonomy_platform:orin -c '
-    source /opt/ros/humble/setup.bash
-    exec timeout --signal=INT --kill-after=5s 30s \
-      ros2 launch mavros px4.launch fcu_url:=/dev/ttyUSB0:115200
-  '
+WR_MAPPING_CONTAINER=always WR_MAPPING_SERIAL_DEVICE=/dev/ttyUSB0 \
+  bash deploy/run-ros.sh timeout --signal=INT --kill-after=5s 30s \
+  ros2 launch mavros px4.launch fcu_url:=/dev/ttyUSB0:115200
 ```
 
 Inside the same ROS environment/domain as the running connector:
@@ -468,17 +464,11 @@ bash -n deploy/check-hardware.sh deploy/check-platform-hardware.sh \
 
 When pycolmap is unavailable, use `pytest -q --ignore=tests/test_processing.py`
 and state that exclusion in the results. To reproduce the ROS test using the
-existing platform image without attached devices:
+repository image without attached devices:
 
 ```bash
-mapping_repo="$(pwd)"
-docker run --rm --network none --entrypoint /bin/bash \
-  --mount "type=bind,src=$mapping_repo,dst=$mapping_repo" --workdir "$mapping_repo" \
-  drone_autonomy_platform:orin -c '
-    source /opt/ros/humble/setup.bash
-    export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-    .venv/bin/python -m pytest -q tests/test_mavros_ros2.py tests/test_ros_recorder.py
-  '
+bash deploy/run-platform-command.sh env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  python -m pytest -q tests/test_mavros_ros2.py tests/test_ros_recorder.py
 ```
 
 Use `.venv/bin/wr-map --help` for all commands and `COMMAND --help` for arguments.

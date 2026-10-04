@@ -1,0 +1,4 @@
+# The image carries dependencies only; the checkout is mounted at run time.
+*
+!pyproject.toml
+!docker/ros-snapshots.asc

@@ -57,6 +57,9 @@ dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' 'ros-humble-depthai*'
 # Containers usually run as a different user than the checkout owner.
 git -c safe.directory="$bag_repo" -C "$bag_repo" rev-parse HEAD > "$bag_output/git-commit.txt"
 git -c safe.directory="$bag_repo" -C "$bag_repo" diff --stat > "$bag_output/git-diff-stat.txt"
+# Identify the container image (deploy/run-ros.sh) and its pinned package set.
+[[ -z "${WR_MAPPING_IMAGE_ID:-}" ]] || printf '%s\n' "$WR_MAPPING_IMAGE_ID" > "$bag_output/container-image.txt"
+[[ ! -d /opt/wallering/manifest ]] || cp -r /opt/wallering/manifest "$bag_output/image-manifest"
 # Refuse duplicate owners. A failed graph query is also a failed preflight.
 timeout 15 ros2 node list --no-daemon > "$bag_output/nodes-before.txt"
 if grep -qx /oak "$bag_output/nodes-before.txt"; then echo "OAK driver is already running" >&2; exit 2; fi

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Run a mapping command with the existing platform's ROS and USB environment.
+# Run a mapping command in this repository's ROS image with USB access.
 # This does not open the UART; use the existing MAVROS connector.
 set -euo pipefail
 platform_repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-platform_image="${WR_PLATFORM_IMAGE:-drone_autonomy_platform:orin}"
+platform_image="${WR_MAPPING_IMAGE:-${WR_PLATFORM_IMAGE:-wallering-mapping:humble}}"
+platform_plugdev="$(getent group plugdev | cut -d: -f3)"
 exec docker run --rm --network host --ipc host \
+  --user "$(id -u):$(id -g)" --group-add "$platform_plugdev" \
   --entrypoint /bin/bash \
   --device-cgroup-rule='c 189:* rmw' \
   --mount type=bind,src=/dev/bus/usb,dst=/dev/bus/usb \
@@ -13,7 +15,7 @@ exec docker run --rm --network host --ipc host \
   --mount "type=bind,src=$platform_repo,dst=$platform_repo" \
   --workdir "$platform_repo" \
   --env "ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}" \
-  --env PYTHONNOUSERSITE=1 \
+  --env PYTHONNOUSERSITE=1 --env "PYTHONPATH=$platform_repo/src" \
   "$platform_image" -c '
     set -eo pipefail
     source /opt/ros/humble/setup.bash

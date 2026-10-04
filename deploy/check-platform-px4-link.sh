@@ -12,7 +12,7 @@ test -c "$serial_path"
 serial_group="$(stat -Lc %g -- "$serial_path")"
 serial_major="$(stat -Lc %t -- "$serial_path")"
 serial_minor="$(stat -Lc %T -- "$serial_path")"
-serial_image="${WR_PLATFORM_IMAGE:-drone_autonomy_platform:orin}"
+serial_image="${WR_MAPPING_IMAGE:-${WR_PLATFORM_IMAGE:-wallering-mapping:humble}}"
 
 # Inspect descriptors by device number so aliases and container paths also match.
 # Read/inspection capabilities stay in this container, which has no devices.
@@ -53,5 +53,6 @@ exec docker run --rm --network none --user "$(id -u):$(id -g)" \
   --cap-drop ALL --security-opt no-new-privileges --read-only \
   --device "$serial_path:$serial_path" --group-add "$serial_group" \
   --mount "type=bind,src=$serial_repo,dst=$serial_repo" --workdir "$serial_repo" \
-  --env PYTHONDONTWRITEBYTECODE=1 --entrypoint "$serial_repo/.venv/bin/python" \
+  --env PYTHONDONTWRITEBYTECODE=1 --env "PYTHONPATH=$serial_repo/src" \
+  --entrypoint /opt/wr-venv/bin/python \
   "$serial_image" -m wallering_mapping.px4_link_diagnostics "$@" --device "$serial_path"

@@ -46,3 +46,30 @@ jobs:
           source /opt/ros/humble/setup.bash
           python3 -c 'import rclpy, mavros_msgs, geometry_msgs, sensor_msgs, rosidl_runtime_py'
           pytest -q tests/test_mavros_ros2.py tests/test_ros_recorder.py
+  image:
+    # Same architecture as the Orin; proves a clean checkout builds the runtime.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: wallering-mapping:humble
+          load: true
+          build-args: BUILD_JOBS=4
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run the complete suite, including ROS and PyCOLMAP, in the image
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$PWD,dst=$PWD" --workdir "$PWD" \
+            --env "PYTHONPATH=$PWD/src" --env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            wallering-mapping:humble bash -c '
+              set -eo pipefail
+              source /opt/ros/humble/setup.bash
+              python -c "import pycolmap, depthai, rclpy, mavros_msgs"
+              for p in depthai_ros_driver mavros mavros_extras rosbag2_storage_mcap; do ros2 pkg prefix "$p"; done
+              python -m pytest -q
+            '

@@ -23,8 +23,9 @@ parts of the setup pass, fail, or remain untested. The skill is stored under
   controller through direct USB when TELEM2 is silent.
 - [Acceptance record](../../docs/hardware-acceptance.md): measured bench results
   and unresolved blockers. Treat these as historical evidence; recheck changed hardware.
-- [Jetson commissioning](../../docs/jetson-setup.md): storage, service deployment
-  and loaded capture acceptance.
+- [Jetson commissioning](../../docs/jetson-setup.md): fresh-Orin preparation
+  (`deploy/prepare-orin.sh --check` audits a host), the repository image
+  (`deploy/build-image.sh`), storage, service deployment and loaded capture acceptance.
 - [MAVROS timing](../../docs/mavlink-integration.md): clock and topic contracts.
   [Postprocessing](../../docs/postprocessing.md) covers engine and accuracy workflows.
 
@@ -83,9 +84,10 @@ reports in `runs/` with new names. Reports deliberately refuse replacement.
 
 Update startup probes and regression tests for actual failures. Run focused tests,
 Ruff and shell syntax checks, and exercise changed wrappers where hardware allows.
-Run the ROS test in the platform image when ROS is absent on the host. If the
-pinned ARM64 pycolmap dependency is unavailable, identify the excluded processing
-tests explicitly instead of presenting the portable test run as the complete suite.
+Run the complete suite, including ROS and PyCOLMAP tests, in the repository image
+(`bash deploy/run-platform-command.sh env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`).
+If the image is not built, identify the excluded processing/ROS tests explicitly
+instead of presenting the portable test run as the complete suite.
 
 Keep installation, startup smoke checks, sustained throughput and physical
 timing/survey acceptance distinct in the result. Startup checks must not claim

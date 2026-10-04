@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reuse drone_autonomy_platform's already-built Humble environment.
+# Run in this repository's Humble image (deploy/build-image.sh).
 # The existing connector owns UART/MAVLink; this container only subscribes.
 set -euo pipefail
 platform_repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"

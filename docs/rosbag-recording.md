@@ -8,9 +8,11 @@ The Python launch description configures standard ROS processes; it does not
 subscribe to or write sensor messages.
 
 The commissioned runtime is ROS Humble on ARM64, driver 2.12.2 with DepthAI C++
-2.31.1, MAVROS 2.14.0 and rosbag2/MCAP 0.15.14. The existing
-`drone_autonomy_platform:orin` image supplies these packages on this Jetson.
-`deploy/run-ros.sh` bypasses its application entrypoint. Native installations need
+2.31.1, MAVROS 2.14.0 and rosbag2/MCAP 0.15.14 (bench, 2026-10-04). The repository
+[image](../docker/Dockerfile) pins driver 2.12.2, MAVROS 2.14.0 and rosbag2/MCAP
+0.15.16 from the 2026-08-07 ROS snapshot, plus `mavros_extras` for the GPS status
+topics; build it as in [Jetson setup](jetson-setup.md#fresh-orin).
+`deploy/run-ros.sh` uses it whenever ROS is not sourced. Native installations need
 `ros-humble-depthai-ros-driver`, `ros-humble-mavros` and
 `ros-humble-rosbag2-storage-mcap` in a sourced Humble environment. Python DepthAI
 3.10.0 remains the separate firmware/diagnostic SDK, not the live ROS driver.
