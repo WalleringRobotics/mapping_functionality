@@ -36,11 +36,41 @@ mapping when integrating multiple cameras and navigation sensors.
 
 ## Prioritized engineering backlog
 
+### Repository review and issue coverage, 2026-10-04
+
+The calibration PRs add useful software but do not establish a survey-qualified rig.
+Review found and corrected unsupported ROS-to-SDK clock conversion, invented zero
+factory covariance, acceptance of inconsistent stereo estimates, incomplete frame
+and timestamp checks, and a motion pattern that confused camera clock offset with
+mounting rotation. Rig completeness now refuses contradictory measured transform
+paths. Original recordings and the pre-existing `.claude/` worktrees are preserved.
+
+| Issue | Implemented or reviewed | Acceptance still needed |
+|---|---|---|
+| [#7](https://github.com/WalleringRobotics/mapping_functionality/issues/7), PX4 100 Hz | Audited per-session requests for HIGHRES_IMU and ATTITUDE_QUATERNION, ACK logging and default-interval restoration | Measured sustained rates, link continuity, pose rate and TIMESYNC comparison |
+| [#8](https://github.com/WalleringRobotics/mapping_functionality/issues/8), guided recording | 110-second sealed calibration mode, 20 Hz mono profile, observed prompt timestamps and ROS lifecycle tests | Operator-performed motion session with accepted rates and successful calibration |
+| [#9](https://github.com/WalleringRobotics/mapping_functionality/issues/9), IMU solver | Synthetic offset/rotation/bias/rate-mismatch tests, frame and timestamp refusal, gap exclusion, residual and held-out gates | Real moving-rig segment repeatability; no absolute optical timing claim |
+| [#10](https://github.com/WalleringRobotics/mapping_functionality/issues/10), camera solver | Supported command, synthetic scene/tracking tests, stereo consistency required, timing ambiguity refusal | Real left/right agreement and mounting check under representative motion |
+| [#11](https://github.com/WalleringRobotics/mapping_functionality/issues/11), calibration application | Legacy and sealed ROS diagnostic camera poses, explicit evidenced ROS timestamp bridges, calibrated antenna lever, hash propagation and unknown-uncertainty preservation | Physical clock-bridge evidence, optical latency, receiver reference and full geolocation acceptance |
+| [#12](https://github.com/WalleringRobotics/mapping_functionality/issues/12), drift | Read-only validate checks with configurable sigma thresholds and explicit insufficient-motion result | A real motion recording compared with its independently reviewed calibration |
+| [#13](https://github.com/WalleringRobotics/mapping_functionality/issues/13), 20 fps | Lossless 1080p RGB/800p mono candidate, resource logging and window rate/gap audit | Passing 20-minute soak before changing the default; thermal and storage evidence |
+| [#14](https://github.com/WalleringRobotics/mapping_functionality/issues/14), optical timing/targets | Repeatable instrumented procedure and evidence template | LED/trigger/target equipment, independent measurements and held-out validation |
+| [#16](https://github.com/WalleringRobotics/mapping_functionality/issues/16), flight trajectory | Bounded offline QGC Plan generator, hashed item map and sealed mission endpoint extraction | QGC loading, PX4 SITL plus synthetic recorder/solver pipeline, then operator-approved flight |
+| [#18](https://github.com/WalleringRobotics/mapping_functionality/issues/18), IMU drops | Deep telemetry QoS, larger DDS shared memory, per-window count deficit and gap diagnostics | Loss-free 20-minute evidence at both default and candidate profiles |
+
+[#15](https://github.com/WalleringRobotics/mapping_functionality/issues/15) remains the
+umbrella tracker. Do not close measured-acceptance issues on synthetic tests alone.
+Nominal rate deficits, inferred timestamp gaps and hardware sequence loss are
+different quantities; standard ROS headers still cannot prove hardware continuity.
+QGroundControl and PX4 SITL were not installed in the inspected host environment.
+
+### Remaining qualification priorities
+
 1. **Timing and camera-to-body calibration.** Qualify OAK exposure-to-PX4 time
    offset and the camera-IMU/camera-body rotation and lever arm, with uncertainty.
-   Provide a repeatable calibration mode that records a dedicated session and
-   produces a versioned calibration result the processing chain consumes. Recordings
-   stay `survey_ready=false` until this exists.
+   Use the calibration recording and solver commands to produce reviewed results,
+   then verify the optical timing and processing clock bridge. Recordings stay
+   `survey_ready=false` until the required physical evidence is supplied.
 2. Field-duration qualification: a 20-minute soak through the image with intended
    workloads and thermal state; exercise the systemd service path and storage mount.
 3. RTK: qualify corrected rover geolocation and NTRIP forwarding against the actual

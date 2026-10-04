@@ -9,7 +9,9 @@ measurements and timing evidence remain available for future camera and algorith
 **Status:** OAK BNO086 firmware has been upgraded to 3.9.9. Acquisition now uses
 the official Luxonis ROS driver, MAVROS and **rosbag2 with MCAP**. A physical bench
 recording passed integrity and requested-window coverage at 2 fps with a 100 Hz
-IMU request (99.79 Hz observed). Field-duration stability, GNSS/RTK and physical
+IMU request (99.79 Hz observed). The current profile uses 200 Hz OAK gyro timestamps
+with interpolated acceleration; that older recording does not qualify the new profile.
+Field-duration stability, GNSS/RTK and physical
 timing/rig calibration still need qualification; see the
 [measured results](docs/hardware-acceptance.md).
 
@@ -38,6 +40,19 @@ commissioning use `--camera-only`. Storage demand is about 4.4 GiB/minute.
 The immutable session contains MCAP files, parameters, calibration, logs and
 checksums. ROS headers do not carry hardware sequence counters, so source sample
 loss remains unknown. A completed bag is not a claim of survey accuracy.
+
+Calibration workflows are available through `wr-map calibrate record`, `solve`,
+`camera`, `mission` and `flight-phases`. Validation can compare a recording with a
+stored rig using `wr-map validate SESSION --rig-calibration rig.json`. See the
+[rig guide](docs/rig-calibration.md), [recording guide](docs/rosbag-recording.md),
+[offline mission workflow](docs/calibration-mission.md), and
+[physical optical/target acceptance procedure](docs/optical-target-acceptance.md).
+The 20 fps profiles are qualification candidates; the production camera default
+remains 2 fps until a complete soak meets its acceptance criteria.
+`wr-map sync-bag SESSION --rig-calibration rig.json --output NEW_DIRECTORY`
+produces diagnostic camera poses directly from sealed ROS recordings. Timestamp
+corrections require an explicit evidenced bridge; see the
+[ROS association contract](docs/ros-bag-association.md).
 
 Import images **offline**, after recording, to use the existing image workflows:
 

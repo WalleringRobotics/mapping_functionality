@@ -41,3 +41,22 @@ def test_nested_flight_phase_cli_cannot_claim_unverified_sequence(tmp_path, caps
     assert not report["sequence_qualified"]
     assert not report["survey_ready"]
     assert (output / "flight-phases.json").is_file()
+
+
+def test_sync_bag_cli_preserves_diagnostic_qualification(tmp_path, capsys):
+    from test_bag_association import fixture
+    root = fixture(tmp_path / "capture")
+    output = tmp_path / "poses"
+    assert cli.main(["sync-bag", str(root), "--output", str(output)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["associated"] == 3
+    assert not report["survey_ready"]
+    assert not report["timestamp_bridge"]["applied"]
+    assert (output / "body-poses.csv").is_file()
+
+
+def test_nested_record_uses_calibration_profile_and_rate_request():
+    args = cli.parser().parse_args(["calibrate", "record", "--output", "capture"])
+    assert args.command == "calibrate-record"
+    assert args.config.name == "oakd-ros-calibration.yaml"
+    assert args.px4_imu_rate == 100

@@ -103,6 +103,9 @@ def parser():
     sync.add_argument("--stream", choices=["rgb", "left", "right"], default="rgb")
     sync.add_argument("--min-fraction", type=float, default=.9)
     sync.add_argument("--rig-calibration", type=Path, help="Compose diagnostic camera poses with explicit timing qualification limits")
+    from .bag_association import add_arguments as bag_sync_arguments
+    bag_sync = commands.add_parser("sync-bag", help="Associate diagnostic camera poses from sealed ROS recordings")
+    bag_sync_arguments(bag_sync)
     ntrip = commands.add_parser("ntrip", help="Forward verified fixed-base NTRIP v2 corrections through MAVROS")
     ntrip.add_argument("--config", type=Path, required=True)
     ntrip.add_argument("--output", type=Path, required=True)
@@ -312,6 +315,11 @@ def main(argv=None):
         elif args.command == "sync":
             from .association import associate
             result = associate(args.session, args.output, args.stream, args.min_fraction, args.rig_calibration)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "sync-bag":
+            from .bag_association import run
+            result = run(args)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
         elif args.command == "ntrip":
