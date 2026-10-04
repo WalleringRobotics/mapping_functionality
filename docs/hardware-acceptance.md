@@ -11,6 +11,25 @@ IMU request. Survey readiness still requires physical timing/rig calibration and
 missing GNSS/RTK evidence. OAK runtime USB is SUPER (5 Gbit/s); TELEM2 remains
 921600 baud with flow control off.
 
+## OAK IMU sync and native rate: 2026-10-04
+
+The 100/100 Hz `COPY` profile stamped `/oak/imu/data` on the accelerometer grid:
+the 100 Hz request rounds up to the BNO086 accelerometer point "125", measured at
+**128.15 Hz** (7.803 ms), one slot in five empty, with the latest gyro sample copied in.
+In one 148 s bag, 1230 of 14,388 messages repeated the previous gyro sample. Gyro
+timestamps were therefore quantised to the accelerometer clock, which would bias
+OAK-to-PX4 timing calibration. Camera-only 20 s runs (`runs/imu-rate-20261004-001`):
+
+| Setting | Msg rate | Interval median (p1–p99) | Repeated gyro | Gaps > 2× |
+|---|---|---|---|---|
+| gyro 100, accel 100→125, COPY | 99.95 Hz | 7.93 ms (7.4–16.4) | 93 | 226 (pattern) |
+| gyro 200, accel 250, LINEAR_INTERPOLATE_ACCEL | 194.7 Hz | 4.99 ms (4.5–5.6) | 2 | 33 (max 45 ms) |
+| gyro 400, accel 500, LINEAR_INTERPOLATE_ACCEL | 345.7 Hz | 2.51 ms (p99 30) | 1 | 84 (max 70 ms) |
+
+The default is now gyro 200 Hz / accel 250 Hz / `LINEAR_INTERPOLATE_ACCEL`. Sample
+loss grows with rate (0.27% at 100 Hz, 2.6% at 200 Hz) and is tracked in #18. The
+results below were recorded with the earlier profile.
+
 ## Repository Docker runtime verified: 2026-10-04
 
 The recording stack now runs in this repository's image (`docker/Dockerfile`,
