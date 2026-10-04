@@ -6,7 +6,13 @@ The processing mode supports **building/object geometry** with COLMAP and
 **terrain maps** with OpenDroneMap. Original photographs, calibration, inertial
 measurements and timing evidence remain available for future camera and algorithm upgrades.
 
-**Status:** software implemented and tested without attached camera hardware.
+**Status:** Orin Nano Super and OAK camera checks have run on physical hardware.
+The default survey setup currently fails OAK IMU firmware, loaded PX4 timing and
+GNSS/RTK acceptance;
+see the [measured results and startup checks](docs/hardware-acceptance.md).
+The [hardware command guide](docs/hardware-commands.md) includes setup, serial baud
+checks, ROS/container commands and tests. Future agent sessions can use the
+[repository skill](skills/jetson-mapping-checks/SKILL.md), routed by `AGENTS.md`.
 DepthAI 3.10.0, COLMAP 3.12.x and ODM 3.6.2 are the supported baselines. Hardware
 throughput and real-survey accuracy require [commissioning](docs/jetson-setup.md#commissioning).
 Automated tests exercise storage, geometry conversion, real COLMAP model IO and
@@ -26,6 +32,8 @@ source .venv/bin/activate
 pip install -e '.[oak]'
 wr-map doctor --mode capture --config configs/oakd-survey.json \
   --output-root /mnt/nvme/mapping --probe-device
+wr-map hardware-check --require-jetson --config configs/oakd-survey.json \
+  --output-root /mnt/nvme/mapping --require-mount /mnt/nvme
 wr-map capture --config configs/oakd-survey.json \
   --output /mnt/nvme/mapping/bench-001 --duration 60
 wr-map status /mnt/nvme/mapping/bench-001

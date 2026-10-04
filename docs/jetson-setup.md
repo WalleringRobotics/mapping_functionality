@@ -1,10 +1,11 @@
 # Jetson setup and commissioning
 
-## Proposed baseline
+## Baseline
 
 Orin **Nano**, JetPack 6 / Ubuntu 22.04 / Python 3.10, USB OAK-D, USB 3 and mounted
-NVMe. The installed JetPack is unconfirmed: first record `uname -a`,
-`/etc/nv_tegra_release`, Python version and available memory. Do not upgrade a working
+NVMe. The 2026-10-03 bench identified Orin Nano Super, L4T 36.5.0, Ubuntu 22.04.5
+and Python 3.10.12. See [hardware acceptance](hardware-acceptance.md) for measured
+results, current setup failures, and repeatable startup probes. Do not upgrade a working
 JetPack deployment just for this recorder. USB DepthAI does not use Jetson CSI/Argus.
 
 For capture alongside the existing PX4 connector, use the optional
@@ -22,6 +23,7 @@ git clone --branch feat/oak-photogrammetry-foundation https://github.com/Walleri
 cd mapping_functionality
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip 'setuptools>=68,<80' wheel
 pip install -e '.[oak]'
 ```
 
@@ -47,7 +49,21 @@ wr-map doctor --mode capture --config configs/oakd-survey.json \
 ```
 
 Without `--probe-device`, doctor checks dependencies/storage but does not open the
-camera. During a recording use `wr-map status SESSION` from another terminal; a
+camera. For startup acceptance, run the stronger bounded capture/validation probe:
+
+```bash
+bash deploy/check-hardware.sh --require-jetson --config configs/oakd-survey.json \
+  --output-root /mnt/nvme/mapping --require-mount /mnt/nvme
+```
+
+This checks the actual write/fsync path, host resources, binary imports, USB 3,
+BNO firmware baseline, settings readback, calibrated frames and enabled IMU streams.
+It records temporary images and removes them after validation. `imu=auto` enables
+a present IMU and fails if it cannot work; it never silently falls back to no IMU.
+The present BNO086 reports unsupported firmware 3.2.13 versus the SDK baseline
+3.9.9. Commission that firmware separately before enabling IMU recording.
+
+During a recording use `wr-map status SESSION` from another terminal; a
 heartbeat older than 15 seconds is flagged stale. The heartbeat includes counts,
 writer backlog, free storage, memory availability and host load. A stale heartbeat
 is evidence to investigate, not a command to restart or overwrite a session.
@@ -97,7 +113,12 @@ journalctl -u wr-mapping -f
 sudo systemctl stop wr-mapping
 ```
 
-The launcher checks the mount and uses a unique session name. SIGTERM reaches the
+The launcher runs hardware checks before recording, requires the configured mount,
+and uses a unique session name. It saves a separate startup report beside the session
+and prevents capture if a required check fails. Configure deployment paths and optional
+ROS settings using `deploy/wallering-mapping.env.example`; the unit reads
+`/etc/wallering-mapping.env`. Update the unit's `RequiresMountsFor` if changing storage.
+SIGTERM reaches the
 recorder through `exec`. Automatic restart is disabled so recurring power/USB faults
 cannot silently split a survey. Tune the stop timeout against measured flush time.
 Check final status before removing power. A physical recording-status/start-stop

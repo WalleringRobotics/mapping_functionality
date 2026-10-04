@@ -1,0 +1,303 @@
+# Orin hardware checks and bench results
+
+See the [command guide](hardware-commands.md) for the complete reproducible command
+set and passive serial diagnostics, and the
+[repository skill](../skills/jetson-mapping-checks/SKILL.md) for future agent sessions.
+
+**Update 2026-10-04:** the five-second camera/PX4 collection saved intact images,
+but full readiness **fails** on timing qualification, the configured GNSS topic,
+and OAK IMU firmware. TELEM2 transport now works at 921600 baud with flow control
+off. The findings below distinguish the latest capture from earlier bench tests.
+
+## Five-second collection: 2026-10-04
+
+Collected RGB/left/right plus PX4 telemetry after a 90-second timing warmup.
+The explicit `oakd-mavros-camera-only.json` profile disables the incompatible
+OAK IMU; PX4 IMU telemetry remains enabled. The preserved session is marked
+**failed**, and all three `sync` commands correctly refuse association. No timing
+threshold, PX4 setting, stream rate or firmware was changed to obtain acceptance.
+
+| Check | Finding |
+|---|---|
+| Image integrity | 10 images per camera, approximately 2 Hz, zero sequence gaps; all images decode and their checksums match. All six saved journal hashes match. |
+| Camera settings | RGB 4000×3000, mono 1280×800; 1000 µs and ISO 400; RGB focus 135 and white balance 5000 K. USB 3 `SUPER`. |
+| Camera timestamp offsets | Left/right median 0.017 ms, max 0.018 ms. RGB/left median 15.952 ms, max 16.463 ms. These are reported timestamp differences, not measured physical exposure synchronization. |
+| Host time | NTP synchronized before/after capture; reported last offset +0.526 ms, root distance 22.819 ms. This does not certify submillisecond UTC accuracy. |
+| Clock continuity | No detected clock resets/jumps at the configured 5 ms gate. Maximum adjacent clock-step residual: SDK/monotonic 0.104 ms; ROS/monotonic 0.641 ms. |
+| MAVROS startup | Connected; MAVLINK mode, convergence window 500, max RTT 10 ms. The isolated startup probe reached 501 consecutive acceptable samples. |
+| Timing during camera capture | Across 954 saved samples including warmup: RTT median 3.374 ms, p95 7.474 ms, max 28.250 ms; offset residual median 0.563 ms, p95 1.698 ms, max 9.266 ms. Seventeen observations reset the qualification streak. Maximum streak 256/501; zero qualified samples. |
+| Image interval | Its individual TIMESYNC samples stayed below RTT 10 ms and residual 2 ms, but the preceding required qualification window was absent. All 30 images therefore lack qualified timing evidence. |
+| PX4 data rates during image interval | IMU and attitude approximately 50 Hz, pose 30 Hz, TIMESYNC 10 Hz, state/time reference 1 Hz. No GNSS messages on the configured global topic. |
+| GNSS follow-up | Separate five-second read-only subscription received 25 `GPS_RAW_INT` packets and 25 raw `NavSatFix` messages: 3D fix, 15–18 satellites. No `GLOBAL_POSITION_INT` or global `NavSatFix`. Receiver-reported horizontal accuracy 3.504–3.623 m; vertical 5.098–5.132 m. No RTK-fixed evidence. |
+| OAK IMU | Startup fails: BNO firmware 3.2.13 differs from pinned DepthAI's 3.9.9 baseline. No OAK IMU samples in this diagnostic. |
+| Host resources | Jetson/L4T/dependency checks pass; active thermal zones 49.5–52.0 °C; 2.74 GiB available RAM before capture; approximately 778 GiB free on the checked filesystem; write/fsync/read passes. |
+| Power/CUDA | Host confirms MAXN_SUPER. CUDA allocation/device-memory readback passes, compute capability 8.7. Container could not run `nvpmodel`; the host query supplies that evidence. |
+
+The raw-fix follow-up demonstrates a working GNSS receiver. The configured
+`/mavros/global_position/global` path still supplies no mapping GNSS data; the
+cause of the absent fused/global stream has not been established. Timing spikes
+also need investigation under camera load; this run does not identify their cause.
+
+Local evidence is under ignored `runs/smoke-20261004-001/`: `capture/` (28.0 MB),
+`hardware.json`, `validation-detailed.json`, `measurements.json`, `gnss.json`,
+host-clock snapshots, logs, and a findings/next-steps report. Device identities and
+coordinates stay in those private artifacts, which remain excluded from Git.
+
+### Next steps
+
+1. Commission compatible OAK BNO086 firmware using the supported Luxonis procedure,
+   then re-run default `imu=auto` checks and verify both raw IMU streams.
+2. Diagnose TIMESYNC spikes with camera load active. Compare unloaded/loaded UART
+   RTT, CPU scheduling and USB contention. Keep the current 10 ms RTT, 2 ms
+   residual, 501-sample qualification and 5 ms association limits for acceptance.
+   A longer warmup alone does not guarantee that these gates will pass.
+3. Inspect PX4 estimator/global-position validity and `GLOBAL_POSITION_INT`
+   streaming. Decide explicitly whether mapping needs the raw receiver fix or
+   fused global position, then verify that topic's timestamp and reference frame.
+   Do not silently substitute one for the other.
+4. For RTK acceptance, provision the missing MAVROS extras and verify correction
+   delivery, fixed status, receiver uncertainty and the commissioned base/rig.
+5. Repeat full camera/OAK-IMU/PX4 capture, integrity checks and association for all
+   cameras, followed by the loaded soak and physical timing/calibration tests.
+   Resolve the earlier storage-service and reconstruction-engine gaps before
+   deploying those parts of the PR stack.
+
+Validation before publication: 117 host tests pass, with the ROS test skipped on
+the host and passing separately in the platform image. The processing test module
+is excluded locally because pinned pycolmap is unavailable; workstation CI retains
+that coverage. Ruff and shell syntax checks pass. The GNSS script and ROS/container
+command wrapper were exercised on this hardware. The sample's failed acceptance
+is retained; passing software tests do not override it.
+
+After collection, the temporary MAVROS connector and camera process exited. Host
+descriptor inspection found no UART or USB-device owners, with no denied process
+inspections. No temporary containers remained. The hardware can be shut down
+normally; no shutdown command was issued by the checks.
+
+## Bench review: 2026-10-03
+
+Reviewed the complete stack through `0ff3ff1` (PRs #1–#3) on the physical Orin.
+The platform reference is `../drone_autonomy_platform` at `c9f542a` and its
+existing `drone_autonomy_platform:orin` image. The image's entrypoint differs from
+the checkout and attempts a model export, so the mapping check wrapper explicitly
+sources ROS/its overlay instead of invoking that entrypoint.
+
+| Area | Measured result | Acceptance |
+|---|---|---|
+| Host | Orin Nano Super, aarch64, Ubuntu 22.04.5, Python 3.10.12, L4T 36.5.0, MAXN_SUPER | Host baseline passes |
+| CUDA | CUDA 12.6 installed; driver identifies Orin, compute capability 8.7; allocation and device-memory readback pass | Basic CUDA access passes; reconstruction untested |
+| Temperature | Active CPU/GPU/SoC zones around 50–53 °C; inactive CV zones return EAGAIN | Startup handles inactive zones and checks active hot/critical trips |
+| OAK USB | Enumerates as `03e7:2485` at 480 Mbit/s before boot; DepthAI negotiates `SUPER` | Runtime USB 3 passes |
+| OAK sensors | IMX378 RGB, two OV9282 mono cameras, BNO086 IMU; factory RGB focus 135 | Identity and EEPROM/pixel calibration access pass |
+| Camera recording | RGB output 4000×3000, mono 1280×800; 1000 µs, ISO 400, RGB focus 135 / white balance 5000 K; 60-second probe saved 120 frames per stream at 2 FPS without gaps or setting changes | Camera-only startup passes with an explicit diagnostic `imu=off` profile |
+| OAK IMU | Installed 3.2.13; DepthAI 3.10.0 bundles 3.9.9 and rejects the installed firmware; raw IMU produces no samples | **Default `imu=auto` capture fails**; firmware commissioning required |
+| Storage | Checkout is on NVMe; approximately 778 GiB free at inspection; `/mnt/nvme/mapping` does not exist | Configure the service's real storage root/mount before deployment |
+| ROS runtime | Host has no `/opt/ros`; existing platform image has Humble, MAVROS 2.14.0, GeographicLib EGM96 data | Real ROS parameter-service/DDS/CDR and startup-subscriber tests pass in that image |
+| MAVROS graph | `/mavros/state`, `/mavros/timesync_status`, `/mavros/time`; MAVLINK mode, convergence window 500, max RTT 10 ms | Supplied time-node defaults corrected to `/mavros/time` |
+| PX4 serial | UAV-DEV/CP210x `/dev/ttyUSB0` opens in the platform container with dialout access; host user lacks dialout | No heartbeat; passive 5-second listens at 921600/57600/115200/460800 and a further 20-second retry at 115200 received **zero bytes** |
+| RTK | Platform image lacks `ros-humble-mavros-extras`; no GPSRAW/GPSRTK/RTCM topics appeared | Install extras in the platform image; receiver/corrections cannot be validated until PX4 telemetry works |
+| Building processing | COLMAP CLI absent; PyPI has no pinned pycolmap 3.12.6 wheel for this ARM64/Python combination | Processing check fails; use a qualified source build or a processing workstation |
+| Terrain processing | Docker available; configured `opendronemap/odm:3.6.2` image absent | Processing check fails; image must match the processing host's native architecture |
+
+The original failed capture is retained locally under `runs/orin-bench-first`.
+The successful camera report is `runs/orin-camera-only-60s.json`; the platform's
+expected failure report is `runs/orin-platform-startup-v2.json`. Hardware reports
+under `runs/` are ignored by Git and may contain device IDs.
+The BNO firmware was **not flashed**, and PX4 parameters were **not changed**.
+No complete camera/IMU/PX4/RTK survey has passed acceptance on this setup.
+
+Validation of this change: 95 tests pass on the host, with the ROS test skipped
+there; that test also passes separately inside the platform image, including the
+new live startup subscriber. Ruff and shell syntax checks pass. The
+`tests/test_processing.py` module could not run because pinned pycolmap is
+unavailable on this interpreter. Its workstation CI coverage remains required.
+
+The observed pre-boot USB speed agrees with the
+[Luxonis USB deployment guide](https://docs.luxonis.com/hardware/platform/deploy/usb-deployment-guide).
+The host release is covered by [NVIDIA's R36.5 baseline](https://developer.nvidia.com/embedded/jetson-linux-r365).
+Firmware version queries use the [DepthAI device API](https://docs.luxonis.com/software-v3/depthai/api/cpp).
+
+## Run startup checks
+
+Use the same account, interpreter, device access, ROS overlay and DDS domain as
+the recorder. Unlike `doctor`, this command opens the OAK and records a disposable
+short session, then checks decoding, checksums, settings and continuity. Stop any
+other camera owner first. It never opens the UART, starts MAVROS, forwards NTRIP,
+flashes firmware, changes power settings or changes flight-controller parameters.
+
+```bash
+mkdir -p runs
+bash deploy/check-hardware.sh --require-jetson \
+  --config configs/oakd-survey.json --output-root runs \
+  --report runs/startup.json
+```
+
+Exit `0` means all requested checks passed; `2` means setup is not ready. Reports
+contain `pass`, `fail`, `warn`, and `skip` entries plus remedies and provenance.
+An omitted telemetry configuration explicitly skips PX4 checks. Reports never
+overwrite existing files. The output directory must already exist. Temporary
+images are removed after the probe, including on a native-probe timeout.
+
+The camera interval defaults to five seconds after the configured warmup (at
+least three frame periods for slower profiles). `--camera-seconds 60` lengthens
+it. The entire camera child has a deadline of warmup + interval + 45 seconds.
+`--min-memory-gib` defaults to 1 GiB available RAM; capture disk reserve comes from
+the profile. Memory/disk thresholds are deployment settings, not throughput guarantees.
+
+For a deployment disk, add `--require-mount /mnt/nvme` and use an output directory
+on that mount. This rejects missing mounts and symlinks onto another filesystem.
+An NVMe root filesystem can be selected explicitly with `--require-mount /`;
+the launcher never substitutes it for a missing configured mount.
+
+### Reuse the existing platform's ROS environment
+
+The wrapper uses the locally built platform image, the checkout's `.venv`, DDS
+domain 1 by default, host networking/IPC, and USB access. It mounts only this
+checkout as writable application storage. Store output/reports under `runs/` or
+another directory in the checkout. `/tmp` inside the container is disposable.
+`WR_PLATFORM_IMAGE` selects a rebuilt platform image; `ROS_DOMAIN_ID` overrides
+the platform domain. Provision the pinned `.venv` first as described in
+[Jetson setup](jetson-setup.md).
+
+```bash
+bash deploy/check-platform-hardware.sh --require-jetson \
+  --config configs/oakd-mavros-survey.json --output-root runs \
+  --telemetry-config configs/mavros-survey.json \
+  --report runs/platform-startup.json
+```
+
+Start the platform's existing MAVROS connector separately. Ensure a single UART
+owner. The mapping startup probe reads time-plugin parameters and subscribes to
+telemetry; it requires current connected state, live required topics and a fresh
+qualified TIMESYNC window. `--telemetry-seconds` defaults to 75 seconds; slow or
+noisy links may need longer. Capture still collects its own independent timing
+window after startup. A startup pass never substitutes for `wr-map sync`.
+
+For corrected GNSS, select `configs/mavros-rtk-survey.json`. This also requires
+RTK-fixed GPSRAW with usable `h_acc`/`v_acc`, CRC-valid observation corrections and
+recent receipt of required topics. Add `--gnss-profile PRIVATE.json` to require a
+completed commissioning profile, matching RTCM station/base ARP coordinates,
+fresh observation corrections and the configured receiver correction-age policy.
+The checked-in GNSS template is deliberately incomplete and will fail this check.
+No caster credentials are read or transmitted by startup checks.
+
+The platform image needs `ros-humble-mavros-extras` in addition to its current
+MAVROS packages for `gps_status` and `gps_rtk`. Rebuild that environment and verify
+the actual plugin/topic names. Merely installing message definitions does not
+create GPS/RTK publishers. Configure the existing correction source separately.
+
+For the silent PX4 link, check TELEM2 TX/RX/GND wiring and the platform's
+`docs/architecture/px4_setup.md`: `MAV_1_CONFIG=TELEM 2`, `MAV_1_MODE=Onboard`,
+`SER_TEL2_BAUD=921600`. Confirm these against the actual firmware in QGroundControl.
+Host serial access requires dialout membership; the recorder itself only needs
+ROS access. A serial adapter's presence does not establish an FCU connection.
+
+### TELEM2 follow-up audit
+
+A further check on 2026-10-03 used the adapter's stable `/dev/serial/by-id` path.
+USB enumeration identified a UAV-DEV USB2Serial Rev. 1.2, VID:PID `10c4:ea60`,
+with the `cp210x` driver. This differs from the FT231X in the linked current
+[Holybro converter specification](https://holybro.com/collections/gps-accessories/products/uart-to-usb-converter).
+The individual adapter identity is kept in ignored local reports.
+
+No MAVROS/router/platform container was running. ModemManager was active but
+reported no modems. Inspection of host process descriptors by device number
+found no UART owner before the active comparison test. The new wrapper also
+refused a second invocation while the diagnostic held the port.
+
+| Probe | Observation |
+|---|---|
+| 921600, receive-only, 10 seconds | Zero bytes |
+| 921600, RTS/CTS, requested 60 seconds | CTS deasserted at open; 22 accepted heartbeat writes, then write timeout; zero received bytes |
+| 921600, flow control off, 30 seconds | 30 accepted heartbeat writes; no write error; zero received bytes |
+
+Accepted writes may only represent queued data. PX4 receipt and bidirectional
+communication were not established. No PX4 heartbeat, IMU, attitude, GNSS or
+TIMESYNC reply was received. Stream configuration and clock offset/RTT remain
+unknown. `MAV_1_CONFIG`, `MAV_1_MODE`, `SER_TEL2_BAUD`, `MAV_1_RATE`,
+`MAV_1_RADIO_CTL` and `MAV_1_FLOW_CTRL` could not be read back.
+
+The requested integration is MAV_1/TELEM2. MAV_0/TELEM1 is the SiK radio and
+MAV_2 is Ethernet. No PX4 parameters, stream rates, routing, firmware or deployed
+integration settings were changed. Confirm the controller-side configuration
+and cable pin mapping, then repeat the
+[active audit](hardware-commands.md#telem2-parameter-stream-and-timing-audit).
+
+Follow-up on 2026-10-04: the same USB identity remained present, and the ownership
+guard found no owner. A fresh 10-second 921600-baud audit with host flow control
+off accepted ten heartbeat writes and received zero bytes, without a write error.
+At that point the controller-side configuration and physical signal path were
+still unverified.
+
+#### Successful retest after controller configuration/reboot
+
+Later on 2026-10-04, a 60.011-second audit at 921600 baud with host flow control
+off received 1,320,241 bytes from PX4 system/component 1/1. It collected all
+required diagnostic evidence. The actual parameter readback was:
+
+| Parameter | Observed value |
+|---|---|
+| `MAV_1_CONFIG` | 102 (TELEM2) |
+| `MAV_1_MODE` | 2 (Onboard) |
+| `SER_TEL2_BAUD` | 921600 |
+| `MAV_1_RATE` | 0 |
+| `MAV_1_RADIO_CTL` | 0 |
+| `MAV_1_FLOW_CTRL` | 0 (Force off) |
+
+Observed receiver rates were HEARTBEAT 1 Hz, ATTITUDE 100 Hz,
+ATTITUDE_QUATERNION 50 Hz, HIGHRES_IMU 50 Hz, GPS_RAW_INT 5 Hz,
+LOCAL_POSITION_NED 30 Hz and ODOMETRY 30 Hz. Sixty host heartbeat writes and
+sixty PX4 heartbeats were recorded. The six parameter replies and 592 matching
+TIMESYNC replies independently establish bidirectional protocol communication;
+heartbeats themselves have no acknowledgement.
+
+TIMESYNC round-trip time was median 2.805 ms, p95 5.204 ms and maximum 8.385 ms.
+The median local-monotonic-minus-PX4 offset was +19525.232287 seconds, with
+0.856 ms standard deviation. These clocks have different origins; that offset
+is not a UTC error. The statistics are unfiltered serial-probe measurements,
+not a MAVROS convergence or survey timing qualification. GNSS message reception
+does not establish a valid fix or RTK accuracy.
+
+This successful sample supersedes the earlier silent-link finding. It does not
+resolve the separate OAK IMU firmware and reconstruction-engine blockers. The
+full report, including the stable adapter identity, is retained under ignored
+`runs/telem2-after-px4-config-20261004-001.json`. The diagnostic changed no PX4
+parameters or stream rates.
+
+### Optional processing host checks
+
+```bash
+bash deploy/check-hardware.sh --mode building --output-root runs
+bash deploy/check-hardware.sh --mode terrain --output-root runs
+```
+
+Building checks exercise the CUDA driver and device memory, require COLMAP 3.12.x
+advertising CUDA support and import pinned pycolmap. Terrain checks inspect the
+local ODM image, require Linux/native architecture, and run its version command.
+Neither command downloads an engine or runs a reconstruction. The same native
+architecture guard also runs before normal ODM execution.
+
+## Service integration
+
+`deploy/record-session.sh` runs the checks before creating the survey session. A
+failure prevents recording and emits the JSON report to the service log. If the
+output root exists, it also preserves a uniquely named `*-hardware.json` beside
+the future session. Firmware, missing hardware and absent telemetry fail closed.
+
+Copy/customize `deploy/wallering-mapping.env.example` as `/etc/wallering-mapping.env`
+when installing the service. Set the real output root/mount, optional camera ID,
+ROS setup/overlay, DDS domain, telemetry config and private GNSS profile there.
+If changing the mount, also update `RequiresMountsFor` in the systemd unit. A host
+service needs a host ROS installation; alternatively deploy in the established
+platform runtime. The provided Docker wrapper is an on-demand checker.
+
+## Remaining physical acceptance
+
+After resolving IMU firmware, loaded PX4 timing, GNSS/RTK delivery and storage, repeat the
+default startup checks and a complete synchronized capture. Then perform the
+20-minute loaded soak, disconnect/service-stop checks, measured exposure/rolling
+shutter timing, mounting/lever-arm calibration, receiver timestamp/uncertainty
+validation and independent survey checkpoints described in
+[Jetson commissioning](jetson-setup.md), [MAVROS timing](mavlink-integration.md)
+and [postprocessing](postprocessing.md). These are measured acceptance tasks;
+startup cannot establish them from device presence or an RTK-fixed flag.
