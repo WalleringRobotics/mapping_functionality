@@ -1,17 +1,20 @@
 [Unit]
-Description=Wallering OAK mapping recorder
+Description=Wallering ROS2 MCAP mapping recorder
 After=local-fs.target
 RequiresMountsFor=/mnt/nvme/mapping
 
 [Service]
 Type=simple
 User=wr-mapping
-SupplementaryGroups=plugdev
+SupplementaryGroups=plugdev dialout
 WorkingDirectory=/opt/wallering/mapping_functionality
 EnvironmentFile=-/etc/wallering-mapping.env
 ExecStart=/bin/bash /opt/wallering/mapping_functionality/deploy/record-session.sh
 KillSignal=SIGTERM
-TimeoutStopSec=90
+KillMode=mixed
+# Publisher/recorder termination is bounded by the supervisor; hashing a long
+# uncompressed bag can take much longer and must finish before power removal.
+TimeoutStopSec=infinity
 Restart=no
 UMask=0027
 NoNewPrivileges=yes

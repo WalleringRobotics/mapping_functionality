@@ -11,6 +11,11 @@ parts of the setup pass, fail, or remain untested. The skill is stored under
 
 ## Choose the workflow
 
+- [ROS2/MCAP recording](../../docs/rosbag-recording.md): current acquisition stack,
+  official drivers, standard recorder, validation and offline image import.
+  `capture`/`record` now use this stack. The former SDK writer is `legacy-capture`;
+  JSON-profile hardware probes below are legacy diagnostics, not ROS acceptance.
+
 - [Hardware command guide](../../docs/hardware-commands.md): setup, inventory,
   startup checks, baud probes, ROS graph inspection, capture and tests.
 - [QGroundControl compatibility and USB diagnosis](../../docs/hardware-commands.md#qgroundcontrol-on-the-orin):
@@ -63,7 +68,10 @@ reports in `runs/` with new names. Reports deliberately refuse replacement.
 - Query actual MAVROS topics and time-plugin parameters. `/mavros/time` was the
   observed time node; verify it for the deployed graph. RTK requires running
   `gps_status`/`gps_rtk` plugins from `mavros_extras`, not only message definitions.
-- For a short saved sample, use the five-second collection commands in the guide.
+- For current recorder acceptance, use a bounded ROS capture then validate its MCAP.
+  Report hardware sequence loss as unknown: standard Image/Imu headers lack counters.
+  Keep IMU/PX4 in the original bag and import images only offline.
+- For a legacy clock-bridge diagnostic, use the five-second collection commands in the guide.
   The camera/PX4 diagnostic profile disables only the OAK IMU and allows a fresh
   timing window. Validate the immutable dataset, then run `sync` for every camera
   stream. Report rejected associations, GNSS fix validity and host NTP separately;

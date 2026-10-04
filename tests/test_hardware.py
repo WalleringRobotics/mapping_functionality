@@ -192,15 +192,14 @@ def test_power_gated_thermal_zone_does_not_hide_active_hot_zone(tmp_path, monkey
 
 
 def test_service_launcher_blocks_recording_on_failed_startup(tmp_path):
-    fake = tmp_path / "python"
+    fake = tmp_path / "ros2"
     log = tmp_path / "calls"
     fake.write_text('#!/bin/bash\nprintf "%s\\n" "$@" >> "$WR_TEST_LOG"\nexit 2\n')
     fake.chmod(0o755)
     result = subprocess.run(["bash", "deploy/record-session.sh"], env={
-        **os.environ, "WR_MAPPING_PYTHON": str(fake), "WR_MAPPING_ROOT": str(tmp_path),
+        **os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "WR_MAPPING_ROOT": str(tmp_path),
         "WR_MAPPING_MOUNT": str(tmp_path), "WR_TEST_LOG": str(log),
-        "WR_MAPPING_TELEMETRY_CONFIG": "configs/mavros-survey.json"}, capture_output=True)
+        "WR_MAPPING_CONTAINER": "auto", "WR_MAPPING_ROS_SETUP": ""}, capture_output=True)
     assert result.returncode == 2
-    calls = log.read_text().splitlines()
-    assert "hardware-check" in calls and "record" not in calls
-    assert "--telemetry-config" in calls and "--require-mount" in calls
+    assert b"Required mount is absent" in result.stderr
+    assert not log.exists()  # No driver or recorder may start before the mount check.

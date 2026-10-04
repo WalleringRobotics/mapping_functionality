@@ -1,0 +1,69 @@
+# Official depthai_ros_driver 2.12.x / ROS 2 Humble (DepthAI 2.31.x).
+# Capture ROS messages losslessly; encode images only during offline import.
+/oak:
+  ros__parameters:
+    camera:
+      i_pipeline_type: RGBStereo
+      i_nn_type: none
+      i_enable_imu: true
+      i_enable_ir: false
+      i_usb_speed: SUPER
+      i_calibration_dump: true
+      i_publish_tf_from_calibration: true
+      i_tf_base_frame: oak
+      i_tf_parent_frame: oak_parent_frame
+    rgb:
+      i_resolution: 12MP
+      i_fps: 2.0
+      i_publish_topic: true
+      i_output_isp: true
+      i_set_isp_scale: false
+      i_enable_preview: false
+      i_low_bandwidth: false
+      i_max_q_size: 4
+      i_add_exposure_offset: true
+      i_exposure_offset: 1
+      r_set_man_exposure: true
+      r_exposure: 1000
+      r_iso: 400
+      r_set_man_focus: true
+      r_focus: 135
+      r_set_man_whitebalance: true
+      r_whitebalance: 5000
+    left:
+      i_resolution: 800P
+      i_fps: 2.0
+      i_publish_topic: true
+      i_low_bandwidth: false
+      i_max_q_size: 4
+      i_add_exposure_offset: true
+      i_exposure_offset: 1
+      r_set_man_exposure: true
+      r_exposure: 1000
+      r_iso: 400
+    right:
+      i_resolution: 800P
+      i_fps: 2.0
+      i_publish_topic: true
+      i_low_bandwidth: false
+      i_max_q_size: 4
+      i_add_exposure_offset: true
+      i_exposure_offset: 1
+      r_set_man_exposure: true
+      r_exposure: 1000
+      r_iso: 400
+    imu:
+      i_enable_acc: true
+      i_enable_gyro: true
+      i_enable_mag: false
+      i_enable_rotation: false
+      i_acc_mode: ACCELEROMETER_RAW
+      i_gyro_mode: GYROSCOPE_RAW
+      i_acc_freq: 100
+      i_gyro_freq: 100
+      i_sync_method: COPY
+      i_message_type: IMU
+      i_batch_report_threshold: 20
+      i_max_batch_reports: 20
+      i_max_q_size: 50
+      i_rot_cov: -1.0

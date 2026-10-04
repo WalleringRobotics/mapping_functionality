@@ -4,11 +4,104 @@ See the [command guide](hardware-commands.md) for the complete reproducible comm
 set and passive serial diagnostics, and the
 [repository skill](../skills/jetson-mapping-checks/SKILL.md) for future agent sessions.
 
-**Update 2026-10-04:** OAK BNO086 firmware commissioning is complete: 3.2.13 was
-upgraded to 3.9.9 and both raw IMU streams now produce data. Full readiness still
-**fails**: the newly enabled IMU exposes a recorder queue overflow and accelerometer
-sequence gaps. Earlier camera/PX4 timing and configured-GNSS-topic blockers remain
-unresolved. TELEM2 transport works at 921600 baud with flow control off.
+**Update 2026-10-04:** BNO086 firmware is now 3.9.9. The former Python writer has
+been replaced in the default CLI/service by the official Luxonis ROS driver and
+standard rosbag2/MCAP. A two-minute OAK + PX4 recording passed integrity validation, but its mono
+streams end early and full-interval coverage is not yet qualified. Physical timing, missing GNSS/RTK evidence and rig calibration still
+prevent survey acceptance. TELEM2 remains 921600 baud, flow control off; OAK runtime
+USB is SUPER (5 Gbit/s).
+
+## ROS2/MCAP commissioning: 2026-10-04
+
+See [the reproducible recording procedure](rosbag-recording.md). Runtime: Humble,
+`depthai_ros_driver` 2.12.2 / C++ DepthAI 2.31.1, MAVROS 2.14.0 and rosbag2/MCAP
+0.15.14, all ARM64 from the existing platform image. The ROS driver is separate
+from the host Python DepthAI 3.10.0 used for firmware commissioning.
+
+The default profile requests 2 fps RGB/left/right, 100 Hz raw accelerometer and
+gyroscope, COPY synchronization, manual image settings and uncompressed indexed
+MCAP. A 60-second warmup preceded a requested 120-second recording; saved receipt
+time spans 119.725 seconds. The bag is approximately 8.7 GiB across nine MCAP files.
+
+| Stream | Saved messages | Observed rate / dimensions |
+|---|---:|---|
+| RGB | 239 | 1.9997 Hz, 4056×3040 |
+| Left mono | 237 | 2.0000 Hz, 1280×800 |
+| Right mono | 231 | 2.0000 Hz, 1280×800 |
+| OAK combined IMU | 11,902 | 99.4057 Hz |
+| PX4 raw IMU | 5,985 | 50.0003 Hz |
+| PX4 local pose | 3,591 | 29.9994 Hz |
+| Raw GNSS fix | 598 | 598 valid status values |
+| TIMESYNC | 1,196 | 0 qualified observations |
+
+All three streams start within 0.362 seconds of the bag start, but the last left
+image precedes the bag end by 1.700 seconds and the last right image by 4.687
+seconds (RGB: 0.425 seconds). The cause of this truncated mono tail remains
+unresolved; it must not be attributed to initial discovery. All saved image
+streams have monotonic headers and no interior interval over 1.5 frame periods.
+The revised audit separates readable/valid storage from full capture coverage:
+this bag is `valid=true`, `capture_ready=false`, `survey_ready=false`. Effective parameters, constant image/CameraInfo geometry,
+all CDR payloads, metadata counts and file checksums passed the offline audit.
+No writer-overflow message occurred. The IMU average rate is near 100 Hz, but its
+combined timestamps are irregular (maximum interval 94.864 ms); hardware sequence
+loss is **unknown**, because standard ROS Image/Imu messages lack those counters.
+This is not evidence that the earlier accelerometer source gaps are fixed.
+
+PX4 remains connected. Its fresh timing window reached only 143 consecutive good
+samples, below the unchanged requirement of 501. RTT median/p95/max were
+3.795/6.095/26.172 ms; offset residual median/p95/max were 0.437/1.179/9.323 ms.
+The configured fused-global GNSS topic and both `gpsstatus` raw/RTK topics had no
+messages. Valid raw fixes do not replace RTK evidence or qualify geolocation.
+The official driver also reports absent IMU extrinsics and publishes a placeholder
+zero transform; physical mounting calibration remains required.
+
+An additional camera-only, unbounded recording was stopped with SIGTERM. rosbag2
+finalized successfully and the supervisor released its camera owner. Finalization
+includes whole-file hashing, which can take substantial time for uncompressed bags;
+wait for complete state before power removal. The service allows hashing to finish.
+
+Private evidence is under ignored `runs/rosbag-commission-20261004-001/`: the
+`final-001` recording and external audit, preceding 60-second trial, preserved
+preflight failure, shutdown trial, and offline/replay/test evidence. The source
+checkout changed during commissioning; each bag saves the requested/effective
+profiles and package versions. Subsequent runs also archive the supervisor scripts.
+
+Offline import produced all 707 lossless PNG images with CameraInfo calibration
+and original timestamps. The corrected external audit is `final-001-audit-v2.json`;
+the imported dataset carries that same coverage result. Standard rosbag2 replayed
+the recorded IMU in an isolated network/domain. At 10× playback it reported queue
+starvation delays; this confirms readability, not real-time replay performance.
+
+Next qualification: isolate the truncated mono tail with a quiet repeat and
+independent ROS publisher-versus-recorder counts, then a field-duration soak.
+Continue PX4 timing/link-load
+investigation without relaxed gates, the missing GNSS/RTK plugins/topics, and
+physical timing/mounting calibration. Static bench images are not a reconstruction
+or survey-accuracy test.
+
+## 100 Hz IMU trial: 2026-10-04
+
+Reduced `imu_hz` from 200 to 100 in `configs/oakd-survey.json` and requested a
+60-second capture. RGB/left/right remained at 2 FPS, with `queue_frames=12` and
+the existing IMU batching settings. The recorder again aborted early with
+`Writer backlog exceeded queue_frames`; this rate change alone is not a fix.
+
+It saved one image from each camera and 42 samples from each IMU sensor over
+approximately 0.41 seconds. The gyroscope delivered approximately 100 Hz with
+zero sequence gaps. The accelerometer delivered approximately 99 Hz while its
+sequence counter advanced at approximately 126 Hz, leaving 11 missing sequences.
+This short observation is consistent with the BNO086's differing rate steps;
+it does not establish sustained performance. Firmware readback was still 3.9.9
+and USB was `SUPER`.
+
+This historical trial left the SDK profile at 100 Hz. The subsequent ROS2 trial
+above replaces its live writer; increasing the custom writer queue is no longer
+the chosen acquisition fix. Original accelerometer sample continuity remains
+unresolved. Validation thresholds are unchanged.
+
+The failed capture, logs, validation report and measured rates are preserved
+under ignored `runs/oak-imu-100hz-20261004-001/`. Validation correctly returns a
+failure for the incomplete session and reports the accelerometer gaps.
 
 ## OAK IMU firmware upgrade: 2026-10-04
 

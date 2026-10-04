@@ -1,5 +1,9 @@
 # Hardware command guide
 
+Current acquisition uses [ROS2/MCAP recording](rosbag-recording.md). Direct-SDK
+capture examples below are retained as legacy diagnostic procedures; they do not
+run or qualify the current ROS recording stack.
+
 These are the reproducible commands used for the Orin/OAK/PX4 review. Run them
 from the repository root and choose a new report/session name for each run.
 [Measured results](hardware-acceptance.md) describe what passed and what is blocked.
@@ -382,7 +386,7 @@ For a five-second camera/PX4 diagnostic using the existing MAVROS connector:
 
 ```bash
 mkdir runs/smoke-001
-bash deploy/run-platform-command.sh .venv/bin/wr-map capture \
+bash deploy/run-platform-command.sh .venv/bin/wr-map legacy-capture \
   --config configs/oakd-mavros-camera-only.json \
   --telemetry-config configs/mavros-survey.json \
   --output runs/smoke-001/capture --duration 5
@@ -429,13 +433,13 @@ inspect raw receiver fixes separately. A valid raw fix does not establish a fuse
 global position or RTK accuracy. This command publishes nothing.
 
 ```bash
-.venv/bin/wr-map capture --config configs/oakd-camera-only.json \
+.venv/bin/wr-map legacy-capture --config configs/oakd-camera-only.json \
   --output runs/camera-bench-001 --duration 60
 .venv/bin/wr-map status runs/camera-bench-001
 .venv/bin/wr-map validate runs/camera-bench-001 --report runs/camera-validation-001.json
 
 # After IMU and MAVROS acceptance, in a ROS-enabled environment:
-.venv/bin/wr-map capture --config configs/oakd-mavros-survey.json \
+.venv/bin/wr-map legacy-capture --config configs/oakd-mavros-survey.json \
   --telemetry-config configs/mavros-survey.json --output runs/survey-001 --duration 60
 .venv/bin/wr-map sync runs/survey-001 --output runs/alignment-001
 ```

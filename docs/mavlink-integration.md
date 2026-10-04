@@ -1,5 +1,9 @@
 # PX4/MAVROS integration and timing review
 
+Current acquisition uses [ROS2/MCAP recording](rosbag-recording.md). Direct-SDK
+capture examples below are retained as legacy diagnostic procedures; they do not
+run or qualify the current ROS recording stack.
+
 This change is stacked on the capture/postprocessing foundation. It uses the
 existing MAVROS companion link from `drone_autonomy_platform`; that process owns
 TELEM2/UART and MAVLink TIMESYNC. The mapping recorder subscribes through ROS 2.
@@ -144,7 +148,7 @@ after it. Copy/tune the camera profile for the actual early OAK-D and check
 `wr-map inspect`; the exact Kickstarter board IMU has not been hardware-probed.
 
 ```bash
-wr-map capture --config configs/oakd-mavros-survey.json \
+wr-map legacy-capture --config configs/oakd-mavros-survey.json \
   --telemetry-config configs/mavros-survey.json \
   --output /mnt/nvme/mapping/px4-bench-001 --duration 60
 wr-map status /mnt/nvme/mapping/px4-bench-001

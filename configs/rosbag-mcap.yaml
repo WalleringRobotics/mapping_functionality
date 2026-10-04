@@ -1,0 +1,8 @@
+# Start uncompressed to measure throughput without compression contention.
+# Keep chunks, indexes and checksums for inspection and recovery.
+compression: None
+noChunkCRC: false
+noChunking: false
+noMessageIndex: false
+noSummary: false
+chunkSize: 4194304

@@ -16,25 +16,46 @@ def positive(value):
     return number
 
 
+def nonnegative_integer(value):
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return number
+
+
 def parser():
     result = argparse.ArgumentParser(prog="wr-map")
     commands = result.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect", help="Probe OAK sensors, IMU and USB link")
     inspect.add_argument("--device-id")
-    record = commands.add_parser("capture", aliases=["record"], help="Mode 1: onboard recording")
+    record = commands.add_parser("capture", aliases=["record"], help="Record official ROS drivers with rosbag2/MCAP")
+    record.add_argument("--config", type=Path, default=Path("configs/oakd-ros.yaml"))
+    record.add_argument("--output", type=Path, required=True)
+    record.add_argument("--device-id")
+    record.add_argument("--duration", type=nonnegative_integer, default=60, help="Recording seconds; 0 until Ctrl+C")
+    record.add_argument("--warmup", type=nonnegative_integer, default=5)
+    record.add_argument("--require-mount", type=Path)
+    ownership = record.add_mutually_exclusive_group()
+    ownership.add_argument("--camera-only", action="store_true")
+    ownership.add_argument("--start-mavros", action="store_true", help="Own MAVROS for this session; otherwise reuse it")
+    record.add_argument("--fcu-url", default="/dev/ttyUSB0:921600")
+    bag_import = commands.add_parser("bag-import", help="Offline lossless image import from a sealed ROS recording")
+    bag_import.add_argument("session", type=Path)
+    bag_import.add_argument("--output", type=Path, required=True)
+    record = commands.add_parser("legacy-capture", help="Legacy direct-SDK diagnostic writer (not the recording stack)")
     record.add_argument("--config", type=Path, required=True)
     record.add_argument("--output", type=Path, required=True)
     record.add_argument("--device-id")
     record.add_argument("--telemetry-config", type=Path, help="Subscribe to the existing PX4/MAVROS connector")
     record.add_argument("--duration", type=positive, help="Seconds after warmup; otherwise until Ctrl+C")
-    doctor = commands.add_parser("doctor", help="Check dependencies and output storage")
+    doctor = commands.add_parser("doctor", help="Check processing or legacy SDK dependencies/storage")
     doctor.add_argument("--mode", choices=["capture", "process"], required=True)
     doctor.add_argument("--config", type=Path, default=Path("configs/oakd-survey.json"))
     doctor.add_argument("--output-root", type=Path, required=True)
     doctor.add_argument("--probe-device", action="store_true")
     doctor.add_argument("--device-id")
     doctor.add_argument("--backend", choices=["building", "terrain"], default="building")
-    hardware = commands.add_parser("hardware-check", help="Run bounded hardware startup probes")
+    hardware = commands.add_parser("hardware-check", help="Run legacy SDK or processing startup probes")
     hardware.add_argument("--mode", choices=["capture", "building", "terrain"], default="capture")
     hardware.add_argument("--config", type=Path, default=Path("configs/oakd-survey.json"))
     hardware.add_argument("--output-root", type=Path, required=True)
@@ -124,6 +145,24 @@ def main(argv=None):
             from .oak import inspect_device
             result = inspect_device(args.device_id)
         elif args.command in {"record", "capture"}:
+            import os
+            repo = Path(__file__).resolve().parents[2]
+            launcher = repo / "deploy/run-ros.sh"
+            if not launcher.is_file():
+                raise ValueError("ROS capture requires this repository checkout (install with pip -e)")
+            command = ["bash", str(launcher), "bash", str(repo / "deploy/record-rosbag.sh"),
+                       "--output", str(args.output.resolve()), "--config", str(args.config.resolve()),
+                       "--duration", str(args.duration), "--warmup", str(args.warmup),
+                       "--fcu-url", args.fcu_url]
+            for flag, value in (("--device-id", args.device_id), ("--require-mount", args.require_mount)):
+                if value:
+                    command.extend([flag, str(value)])
+            if args.camera_only:
+                command.append("--camera-only")
+            if args.start_mavros:
+                command.append("--start-mavros")
+            os.execvp("bash", command)
+        elif args.command == "legacy-capture":
             from .oak import record
             from .telemetry_config import TelemetryConfig
             telemetry = TelemetryConfig.read(args.telemetry_config) if args.telemetry_config else None
@@ -170,8 +209,14 @@ def main(argv=None):
             print(encoded, end="")
             return 0 if result["ready"] else 2
         elif args.command == "status":
-            from .operations import status
-            result = status(args.session)
+            if (args.session / "state").is_file():
+                result = {"session": str(args.session), "state": (args.session / "state").read_text().strip()}
+            else:
+                from .operations import status
+                result = status(args.session)
+        elif args.command == "bag-import":
+            from .bags import import_bag
+            result = import_bag(args.session, args.output)
         elif args.command == "simulate":
             from .simulate import simulate
             if args.frames < 1:
@@ -180,7 +225,11 @@ def main(argv=None):
         elif args.command == "validate":
             from .dataset import write_json
             from .validate import validate
-            result = validate(args.session)
+            if (args.session / "state").is_file() or (args.session / "bag").is_dir():
+                from .bags import audit_bag
+                result = audit_bag(args.session)
+            else:
+                result = validate(args.session)
             if args.report:
                 if args.report.resolve().is_relative_to(args.session.resolve()):
                     raise ValueError("Write reports outside the immutable source session")

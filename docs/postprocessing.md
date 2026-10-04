@@ -1,5 +1,10 @@
 # Offline processing: building and terrain recipes
 
+ROS recordings must first be checked and imported using `wr-map bag-import`, as
+shown in the [recording guide](rosbag-recording.md#offline-image-preparation).
+All image-dataset paths below refer to that derived output or a legacy SDK session.
+Keep the original MCAP alongside it for inertial and telemetry processing.
+
 ## Workstation setup
 
 Use Linux and Python 3.10–3.12. Capture dependencies and processing dependencies are
@@ -8,7 +13,7 @@ separate; the Orin need not install reconstruction engines.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[processing,terrain]'
+pip install -e '.[bags,processing,terrain]'
 ```
 
 For buildings, install a CUDA-enabled **COLMAP 3.12.6** workstation build using the

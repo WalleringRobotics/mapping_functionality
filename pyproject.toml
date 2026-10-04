@@ -11,6 +11,7 @@ license = {text = "Apache-2.0"}
 dependencies = ["numpy==1.26.4", "opencv-python-headless==4.11.0.86"]
 
 [project.optional-dependencies]
+bags = ["rosbags==0.11.5"]
 oak = ["depthai==3.10.0"]
 processing = ["pycolmap==3.12.6"]
 terrain = ["pyproj==3.7.1"]

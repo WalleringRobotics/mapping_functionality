@@ -1,114 +1,87 @@
 # Jetson setup and commissioning
 
-## Baseline
+The commissioned host is Orin Nano Super, L4T 36.5.0 / Ubuntu 22.04.5 / Python
+3.10.12. OAK uses USB 3; PX4 TELEM2 uses a USB-UART adapter at 921600 baud.
+Keep the working JetPack installation. See [hardware acceptance](hardware-acceptance.md)
+for measured results and outstanding timing/GNSS limits.
 
-Orin **Nano**, JetPack 6 / Ubuntu 22.04 / Python 3.10, USB OAK-D, USB 3 and mounted
-NVMe. The 2026-10-03 bench identified Orin Nano Super, L4T 36.5.0, Ubuntu 22.04.5
-and Python 3.10.12. See [hardware acceptance](hardware-acceptance.md) for measured
-results, current setup failures, and repeatable startup probes. Do not upgrade a working
-JetPack deployment just for this recorder. USB DepthAI does not use Jetson CSI/Argus.
+## Runtime and storage
 
-For capture alongside the existing PX4 connector, use the optional
-[MAVROS integration guide](mavlink-integration.md), including the Humble-compatible
-venv, actual topic/node names, camera ownership and longer timing warmup.
-
-DepthAI 3.10.0, NumPy 1.26.4 and headless OpenCV 4.11.0.86 are pinned. Use a venv to
-avoid replacing JetPack packages. If pip cannot find the ARM64 wheel for the Python/
-glibc combination, resolve that combination rather than silently changing API versions.
+Follow the [ROS recording guide](rosbag-recording.md) for native Humble packages
+or reuse of the existing `drone_autonomy_platform:orin` image. The live recorder
+is rosbag2/MCAP; the host Python environment is for CLI dispatch and offline import:
 
 ```bash
-sudo apt-get update
-sudo apt-get install python3-venv python3-dev libusb-1.0-0 usbutils git
-git clone --branch feat/oak-photogrammetry-foundation https://github.com/WalleringRobotics/mapping_functionality.git
-cd mapping_functionality
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip 'setuptools>=68,<80' wheel
-pip install -e '.[oak]'
+pip install -e '.[bags]'
 ```
 
-USB permissions for a normal capture user:
+Firmware/SDK diagnostics additionally use `.[oak,diagnostics]`; they must run with
+no active ROS camera owner. The bench BNO086 was upgraded from 3.2.13 to 3.9.9 on
+2026-10-04, with firmware and calibration verified after reconnect. Firmware
+updates remain an explicit commissioning operation, never an automatic startup
+step; see [the procedure](hardware-commands.md#oak-bno-imu-firmware-commissioning).
+
+Install USB permissions for the capture user:
 
 ```bash
 sudo install -m 0644 deploy/80-luxonis.rules /etc/udev/rules.d/80-luxonis.rules
-sudo usermod -aG plugdev "$USER"
+sudo usermod -aG plugdev,dialout "$USER"
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-Log out/in and reconnect the camera. Run `lsusb -t` and `wr-map inspect`; the recorder
-requires `SUPER`/`SUPER_PLUS`. The device re-enumerates at boot, so permissions must
-cover bootloader and runtime. Prefer a direct port and secured cable. Separately mount
-NVMe and grant the capture account write access. Avoid root-filesystem fallback.
-
-Before recording, run:
-
-```bash
-wr-map doctor --mode capture --config configs/oakd-survey.json \
-  --output-root /mnt/nvme/mapping --probe-device
-```
-
-Without `--probe-device`, doctor checks dependencies/storage but does not open the
-camera. For startup acceptance, run the stronger bounded capture/validation probe:
+Log out/in and reconnect. OAK re-enumerates during boot, so the rule covers both
+bootloader and runtime. Verify `SUPER` in `oak.log`, not just the idle USB device.
+Use a secured direct USB 3 cable. Mount NVMe explicitly and grant the capture user
+write access to the output directory. Budget approximately 4.4 GiB/minute for the
+uncompressed 2 fps profile plus space for offline PNG imports and exports.
 
 ```bash
-bash deploy/check-hardware.sh --require-jetson --config configs/oakd-survey.json \
-  --output-root /mnt/nvme/mapping --require-mount /mnt/nvme
+export WR_MAPPING_ROOT=/mnt/nvme/mapping
+export WR_MAPPING_MOUNT=/mnt/nvme
+wr-map capture --output /mnt/nvme/mapping/bench-001 --duration 120 --warmup 60 \
+  --require-mount /mnt/nvme
+wr-map validate /mnt/nvme/mapping/bench-001 --report /mnt/nvme/mapping/bench-001-audit.json
 ```
 
-This checks the actual write/fsync path, host resources, binary imports, USB 3,
-BNO firmware baseline, settings readback, calibrated frames and enabled IMU streams.
-It records temporary images and removes them after validation. `imu=auto` enables
-a present IMU and fails if it cannot work; it never silently falls back to no IMU.
-For BNO085/BNO086 firmware mismatches, use the separate
-[IMU commissioning procedure](hardware-commands.md#oak-bno-imu-firmware-commissioning)
-before enabling IMU recording. The bench BNO086 was upgraded from 3.2.13 to the
-SDK baseline 3.9.9 on 2026-10-04, with firmware and calibration verified after
-reconnecting. Recheck each device rather than assuming it shares this baseline.
-
-During a recording use `wr-map status SESSION` from another terminal; a
-heartbeat older than 15 seconds is flagged stale. The heartbeat includes counts,
-writer backlog, free storage, memory availability and host load. A stale heartbeat
-is evidence to investigate, not a command to restart or overwrite a session.
+This reuses an existing MAVROS connector. See the recording guide for explicit
+session ownership with `--start-mavros`, stable serial selection, or `--camera-only`.
+Preflight failures and failed recordings are preserved in the output directory.
+Do not overwrite or resume a recording.
 
 ## Commissioning
 
-1. **Identity:** save `inspect` output outside the public repo. Confirm sensor names,
-   actual dimensions, autofocus and IMU. Lite/W/Pro variants differ. Select present streams.
-2. **Focus/exposure:** record a printed target at working distance for 10 seconds. Inspect
-   at 100%, tune fixed lens position/exposure/ISO/white balance, and preserve the profile.
-   Factory focus is the AF-module fallback, not guaranteed optimal survey focus.
-3. **Short session:** record 60 seconds, validate all requested streams, actual settings,
-   dimensions, monotonic times and absence of gaps. Check both IMU sensors if enabled.
-4. **Soak:** record at least 20 minutes at intended FPS, texture and temperature. Use
-   `tegrastats` to watch CPU/RAM, temperature and throttling. Measure disk growth and
-   actual rates. Repeat with other intended onboard workloads active.
-5. **Faults:** test Ctrl+C, then service stop. Disconnect USB on a bench test and verify
-   failed status/nonzero exit. Exercise the reserve by setting it higher than free space,
-   without filling a disk. Abruptly terminate only a disposable run and verify it fails
-   validation. Preserve failed data for diagnosis.
-6. **Geometry:** walk a small loop around a textured static object, then a building with
-   targets. Check registered views, folded/duplicated surfaces and independent metric
-   error before attempting a flight survey.
+1. Record device identity, firmware, runtime versions, effective driver parameters
+   and calibration privately; different OAK variants require separate profiles.
+2. Record a printed target at the working distance. Inspect fixed exposure/focus
+   and calibration at full resolution; the default focus is not a survey guarantee.
+3. Run a short recording and validate geometry, rate, timestamps and required
+   topics. ROS message headers cannot establish hardware sequence continuity.
+4. Run at least a 20-minute soak with intended onboard workloads and temperature.
+   Monitor disk growth, `tegrastats`, throttling, stream continuity and timing.
+   The two-minute bench result does not replace this field-duration qualification.
+5. Test Ctrl+C and service stop using disposable runs; verify finalized MCAP and
+   checksums. Test USB loss on the bench and require a failed audit. Preserve all
+   fault evidence. Do not fill a disk or alter a real survey to exercise failures.
+6. Capture a moving multi-view scene with independent targets before flight.
+   Qualify physical timestamp latency, mounting extrinsics, camera calibration,
+   GNSS/RTK and independent map errors separately.
 
-Initial engineering acceptance targets: no unexplained image/IMU gaps, no throttling,
-no backlog failure, disk headroom, and complete status after clean stop. Timing and
-accuracy require additional checks in [acquisition](acquisition.md) and
-[postprocessing](postprocessing.md).
-
-If overloaded, reduce FPS first, then test RGB alone. Turn off IMU only when that
-evidence is not needed. Increasing buffers cannot fix sustained overload. PNG is
-lossless relative to the ISP image, **not raw Bayer**; it may be expensive on the Nano.
+The existing PX4 timing thresholds remain unchanged. A stable recorder, valid
+GNSS fix and similar timestamp units do not establish geolocation accuracy.
 
 ## Optional service
 
-`deploy/wr-mapping.service` assumes a checkout/venv at
-`/opt/wallering/mapping_functionality`, an NVMe mount at `/mnt/nvme`, and a dedicated
-`wr-mapping` account in `plugdev`. Create the account, install the checkout/venv there
-and grant it write access to `/mnt/nvme/mapping` before installing the service.
-Enable unattended startup only after manual commissioning.
+The service expects native ROS at `/opt/ros/humble/setup.bash`, the checkout at
+`/opt/wallering/mapping_functionality`, and a dedicated `wr-mapping` user with
+`plugdev`, `dialout` and output-storage access. Install the environment file with
+actual paths and UART ownership. Do not enable unattended boot until commissioned.
 
 ```bash
+sudo install -m 0644 deploy/wallering-mapping.env.example /etc/wallering-mapping.env
+# Edit the installed environment file for this deployment before starting.
 sudo install -m 0644 deploy/wr-mapping.service /etc/systemd/system/wr-mapping.service
 sudo systemctl daemon-reload
 sudo systemctl start wr-mapping
@@ -116,20 +89,18 @@ journalctl -u wr-mapping -f
 sudo systemctl stop wr-mapping
 ```
 
-The launcher runs hardware checks before recording, requires the configured mount,
-and uses a unique session name. It saves a separate startup report beside the session
-and prevents capture if a required check fails. Configure deployment paths and optional
-ROS settings using `deploy/wallering-mapping.env.example`; the unit reads
-`/etc/wallering-mapping.env`. Update the unit's `RequiresMountsFor` if changing storage.
-SIGTERM reaches the
-recorder through `exec`. Automatic restart is disabled so recurring power/USB faults
-cannot silently split a survey. Tune the stop timeout against measured flush time.
-Check final status before removing power. A physical recording-status/start-stop
-interface is future work.
+The launcher uses the same ROS preflight/recorder as the CLI, requires the storage
+mount and creates a unique session. `KillMode=mixed` lets its supervisor drain the
+recorder before stopping publishers. The supervisor bounds worker shutdown; the
+unit permits subsequent checksum sealing to finish even for long recordings.
+Wait for `state=complete` before removing power; sealing large bags takes time.
+Automatic restart is disabled. Check final state and validation before removing
+power. The interactive Docker fallback requires daemon access; the supplied service
+assumes native ROS and does not silently grant Docker privileges.
 
 ## Transfer
 
-After clean stop, copy the entire session (e.g. `rsync -a --partial`) and validate on
-the destination. Keep two copies before freeing source storage. Save survey field
-notes plus repository commit, `pip freeze`, JetPack version, camera ID and mounting
-configuration alongside the private dataset.
+Copy the entire finalized directory with `rsync -a --partial`, then validate the
+copy. Keep two copies before freeing source storage. Preserve hardware identity,
+firmware evidence and mounting/field notes privately alongside the session. Import
+images offline with `bag-import` before using the image reconstruction workflows.
