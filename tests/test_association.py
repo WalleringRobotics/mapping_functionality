@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from test_mavros import telemetry_fixture
-from wallering_mapping.association import ClockMap, associate, camera_pose, pose_at, slerp_xyzw
+from wallering_mapping.association import LEGACY_CLOCK_BLOCKER, ClockMap, associate, camera_pose, pose_at, slerp_xyzw
 from wallering_mapping.cli import main
 from wallering_mapping.dataset import jsonl, sha256_file, write_json
 from wallering_mapping.rig_calibration import (ANTENNA, BODY, CAMERA_SOCKETS, LEFT, Transform,
@@ -131,14 +131,17 @@ def test_identity_rig_calibration_reproduces_body_association(tmp_path):
             "orientation_body_flu_to_enu_xyzw"]
         assert after["camera_pose"]["camera_frame"] == RGB
     rig = calibrated["rig_calibration"]
-    assert rig["survey_ready"] and rig["blocking"] == [] and rig["camera_path"] == "direct"
+    assert not rig["survey_ready"] and LEGACY_CLOCK_BLOCKER in rig["blocking"]
+    assert rig["camera_path"] == "direct"
+    assert rig["body_to_camera"]["translation_sigma_m"] is None
+    assert f"{BODY}->{RGB} uncertainty" in rig["blocking"]
     assert rig["sha256"] == sha256_file(tmp_path / "rig.json")
     assert "Not supplied" not in calibrated["camera_extrinsics"]
     assert "camera-poses.csv" in calibrated["output_hashes"]
     assert "rig_calibration" not in plain and "camera-poses.csv" not in plain["output_hashes"]
 
 
-def test_known_offset_rotation_and_lever_give_hand_computed_camera_pose(tmp_path, capsys):
+def test_ros_offset_does_not_shift_sdk_exposure_and_spatial_pose_stays_diagnostic(tmp_path, capsys):
     root, _ = telemetry_fixture(tmp_path / "capture")
     add_factory(root)
     plain = associate(root, tmp_path / "plain")
@@ -150,18 +153,20 @@ def test_known_offset_rotation_and_lever_give_hand_computed_camera_pose(tmp_path
     row = next(jsonl(tmp_path / "rig/associations.jsonl"))
     before = next(jsonl(tmp_path / "plain/associations.jsonl"))
     assert row["sdk_exposure_monotonic_ns"] == 10_500_000_000
-    assert row["exposure_monotonic_ns"] == 10_550_000_000
-    assert row["exposure_ros_ns"] == 1700000001550000000
-    assert row["body_pose"]["position_enu_m"] == pytest.approx([5.5, 2, 3])
-    assert row["estimated_alignment_budget_ms"] == pytest.approx(before["estimated_alignment_budget_ms"] + 1)
+    assert row["exposure_monotonic_ns"] == 10_500_000_000
+    assert row["exposure_ros_ns"] == 1700000001500000000
+    assert row["body_pose"]["position_enu_m"] == pytest.approx([5, 2, 3])
+    assert row["estimated_alignment_budget_ms"] == pytest.approx(before["estimated_alignment_budget_ms"])
     camera = row["camera_pose"]
-    np.testing.assert_allclose(camera["position_enu_m"], [5.7, 2, 2.9], atol=1e-12)
+    np.testing.assert_allclose(camera["position_enu_m"], [5.2, 2, 2.9], atol=1e-12)
     rotation = rotation_from_xyzw(camera["orientation_camera_to_enu_xyzw"])
     np.testing.assert_allclose(rotation @ [0, 0, 1], [1, 0, 0], atol=1e-12)  # lens along body forward
     np.testing.assert_allclose(rotation @ [1, 0, 0], [0, -1, 0], atol=1e-12)  # image right is body right
     report = json.loads((tmp_path / "rig/report.json").read_text())
     assert report["rig_calibration"]["time_offset"]["offset_ns"] == 50_000_000
-    assert report["rig_calibration"]["body_to_camera"]["translation_sigma_m"] == pytest.approx([0.005] * 3)
+    assert report["rig_calibration"]["body_to_camera"]["translation_sigma_m"] is None
+    assert not report["rig_calibration"]["time_offset_applied"]
+    assert row["rig_time_offset_ns"] is None
     assert report["rig_calibration"]["by_source"]["manual_measurement"] == [
         "base_link->gnss_antenna_arp", "base_link->oak_left_camera_optical_frame",
         "oak_camera_exposure->oak_imu", "oak_ros_stamp->px4_ros_stamp"]
@@ -186,7 +191,7 @@ def test_missing_links_block_survey_readiness_with_precise_reasons(tmp_path):
     result = associate(root, tmp_path / "rig", rig_calibration=path)
     rig = result["rig_calibration"]
     assert result["passed"] and not rig["survey_ready"]
-    assert rig["blocking"] == [f"{BODY}->{LEFT} (directly or via oak_imu_frame)", f"{BODY}->{ANTENNA}"]
+    assert rig["blocking"] == [f"{BODY}->{LEFT} (directly or via oak_imu_frame)", f"{BODY}->{ANTENNA}", LEGACY_CLOCK_BLOCKER]
     assert rig["by_source"]["unset"] == [f"{BODY}->{ANTENNA}", f"{BODY}->oak_imu_frame", f"{BODY}->{LEFT}",
                                          f"oak_imu_frame->{LEFT}"]
     assert result["camera_extrinsics"].startswith(f"Not supplied: rig calibration leaves {BODY}->{RGB} unset")
@@ -205,7 +210,7 @@ def test_missing_links_block_survey_readiness_with_precise_reasons(tmp_path):
     data["time_offsets"][0]["sigma_ns"] = None
     write_json(tmp_path / "partial.json", data)
     result = associate(root, tmp_path / "partial", rig_calibration=tmp_path / "partial.json")
-    assert result["rig_calibration"]["blocking"] == ["time offset oak_ros_stamp->px4_ros_stamp"]
+    assert "time offset oak_ros_stamp->px4_ros_stamp" in result["rig_calibration"]["blocking"]
     assert "camera-poses.csv" in result["output_hashes"]
     assert "Rig calibration" in result["camera_extrinsics"]
 

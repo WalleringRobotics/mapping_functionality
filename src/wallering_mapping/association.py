@@ -9,13 +9,15 @@ from pathlib import Path
 import numpy as np
 
 from .dataset import jsonl, sha256_file, write_json
-from .rig_calibration import (BODY, CAMERA_SOCKETS, LEFT, RigCalibration, Transform, check,
+from .rig_calibration import (BODY, CAMERA_SOCKETS, LEFT, RigCalibration, check,
                               factory_camera_links, rotation_from_xyzw, xyzw_from_rotation)
 from .telemetry_config import TelemetryConfig
 from .validate import distribution, validate
 
 STREAM_CAMERAS = {"rgb": CAMERA_SOCKETS[0], "left": LEFT, "right": CAMERA_SOCKETS[2]}
 CAMERA_CLOCK = ("oak_ros_stamp", "px4_ros_stamp")
+LEGACY_CLOCK_BLOCKER = ("ROS IMU offset has no validated mapping to legacy SDK camera timestamps; "
+                        "camera exposure-to-IMU offset is not applied")
 
 
 class ClockMap:
@@ -114,16 +116,19 @@ def rig_context(path, root, stream):
     if camera != LEFT:
         oak = json.loads((root / "calibration.json").read_text())
         if oak.get("cameraData"):
-            # OAK stereo calibration is far tighter than a hand-measured mount; treat it as exact
-            # (stated in the report) so RGB/right inherit the left camera's uncertainty.
-            factory = {frame: Transform(t.parent, t.child, t.rotation, t.translation, np.zeros((6, 6)), t.sources)
-                       for frame, t in factory_camera_links(oak).items()}
+            factory = factory_camera_links(oak)
     body_camera = calibration.camera_to_body(camera, factory)
     gate = check(calibration)
     links = {f"{a}->{b}": "unset" for a, b in calibration.unset}
     links.update({f"{a}->{b}": t.sources[0] for (a, b), t in calibration.transforms.items()})
     links.update({f"{a}->{b}": o["source"] for (a, b), o in calibration.offsets.items()})
     offset = calibration.offsets.get(CAMERA_CLOCK)
+    blocking = list(gate["blocking"])
+    # This consumer only accepts SDK sessions. A ROS gyro lag is not a calibration
+    # of the SDK exposure timestamp or its relationship to the OAK IMU timeline.
+    blocking.append(LEGACY_CLOCK_BLOCKER)
+    if body_camera is not None and body_camera.covariance is None:
+        blocking.append(f"{BODY}->{camera} uncertainty")
     needed = [] if body_camera is not None else [f"{BODY}->{camera}"]
     needed += [] if offset is not None else ["time offset {}->{}".format(*CAMERA_CLOCK)]
     report = {"path": str(path), "sha256": sha256_file(path), "camera_frame": camera,
@@ -133,8 +138,10 @@ def rig_context(path, root, stream):
                             for source in sorted(set(links.values()))},
               "unknown_uncertainty": gate["unknown_uncertainty"],
               "missing_for_camera_pose": needed,
-              "factory_extrinsics": None if factory is None else "OAK factory camera-to-camera links, treated as exact",
-              "survey_ready": gate["complete"], "blocking": gate["blocking"]}
+              "factory_extrinsics": None if factory is None else "OAK factory camera-to-camera uncertainty unknown",
+              "time_offset_applied": False,
+              "clock_limitation": LEGACY_CLOCK_BLOCKER,
+              "survey_ready": not blocking, "blocking": list(dict.fromkeys(blocking))}
     return {"calibration": calibration, "factory": factory, "camera": camera,
             "body_to_camera": body_camera, "offset": offset, "report": report}
 
@@ -169,10 +176,6 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
     config = TelemetryConfig(**values)
     rig = rig_context(rig_calibration, root, stream) if rig_calibration else None
     body_camera = rig["body_to_camera"] if rig else None
-    # Unset or unknown values shift/widen nothing internally but are serialized as null, not exact zero.
-    offset = rig["offset"] if rig else None
-    offset_ns = offset["offset_ns"] if offset else 0
-    offset_sigma_ns = (offset["sigma_ns"] if offset else None) or 0
     sdk = ClockMap([s for s in jsonl(root / "clock.jsonl") if s.get("target") == "depthai_steady"])
     ros = ClockMap([s for s in jsonl(root / "telemetry.jsonl") if s["record_type"] == "clock"])
     inverse_ros = ClockMap([{**s, "target_ns": s["reference_ns"], "reference_ns": s["target_ns"]}
@@ -216,7 +219,8 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
             summary["coordinate_frame"] = (f"Vehicle pose in local ENU, body FLU; camera pose = body pose "
                                            f"composed with {BODY}->{rig['camera']}")
         summary["camera_extrinsics"] = (
-            f"Rig calibration {rig['report']['sha256']} applied: {BODY}->{rig['camera']} and OAK->PX4 time offset"
+            f"Rig calibration {rig['report']['sha256']} spatial transform applied: {BODY}->{rig['camera']}; "
+            "diagnostic pose only, exposure timing remains uncalibrated"
             if not needed else
             f"Not supplied: rig calibration leaves {', '.join(needed)} unset; "
             "do not treat body/GNSS position as camera center")
@@ -233,8 +237,6 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
                 try:
                     mono, sdk_bracket, method = sdk.to_monotonic(frame["host_synced_ns"], max_clock_age)
                     sdk_mono = mono
-                    # The calibrated OAK->PX4 offset puts the exposure on the PX4 pose timeline.
-                    mono += offset_ns
                     index = bisect.bisect_right(sync_times, mono) - 1
                     if index < 0 or mono - sync_times[index] > config.max_sync_age_ms * 1e6:
                         raise ValueError("Missing/stale MAVROS TIMESYNC evidence")
@@ -245,8 +247,7 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
                     pose = pose_at(*mapped["pose"], mono, int(config.max_pose_bracket_ms * 1e6))
                     budget = (sdk_bracket + max(ros_bracket, pose["clock_budget_ns"])
                               + sync["sync_quality"]["timesync_budget_ns"]
-                              + int((config.sdk_sync_budget_ms + config.px4_timestamp_budget_ms) * 1e6)
-                              + offset_sigma_ns)
+                              + int((config.sdk_sync_budget_ms + config.px4_timestamp_budget_ms) * 1e6))
                     if budget > config.max_alignment_budget_ms * 1e6:
                         raise ValueError("Estimated clock-alignment budget exceeds configured limit")
                     imu = nearest_record(*mapped["imu_raw"], mono, int(config.max_pose_bracket_ms * 1e6))
@@ -270,8 +271,8 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
                                   gnss_reference="MAVROS vehicle/global fix; no camera lever arm applied")
                     if rig:
                         record.update(sdk_exposure_monotonic_ns=sdk_mono,
-                                      rig_time_offset_ns=offset["offset_ns"] if offset else None,
-                                      rig_time_offset_sigma_ns=offset["sigma_ns"] if offset else None,
+                                      rig_time_offset_ns=None,
+                                      rig_time_offset_sigma_ns=None,
                                       camera_pose=None if body_camera is None else camera_pose(pose, body_camera))
                     matched.append(record)
                     budgets.append(budget / 1e6)

@@ -180,12 +180,15 @@ The calibration then supplies `antenna_to_camera_flu_m` and
 `lever_covariance_flu_m2` (camera minus `gnss_antenna_arp`, for the aligned stream),
 `calibration_evidence` (its sha256), `lever_from_receiver_reference_verified`
 (true only when the receiver `position_reference` is `ARP`, the calibrated antenna
-point) and `camera_latency_bound_ms` (the OAK→PX4 offset 1σ, counted once inside the
-alignment budget). Those profile fields are ignored, and any non-default value is
-listed in `warnings`. `attitude_sigma_rad` (vehicle attitude error) and the other
-motion bounds still come from the profile. Every `calibration-check` blocking item
-becomes an image reason (`Rig calibration incomplete: ...`), so an `unset` link or
-unknown sigma prevents qualification.
+point). Those spatial profile fields are ignored, and any non-default value is
+listed in `warnings`. `attitude_sigma_rad` remains the vehicle attitude error from
+the profile: mounting uncertainty is a separate quantity. The profile's measured
+`camera_latency_bound_ms` remains required; a ROS gyro offset standard deviation
+is neither an exposure latency bound nor evidence of SDK clock equivalence.
+Every calibration blocker becomes an image reason. Legacy SDK timing blocks
+survey qualification even for fully populated rig files. RGB/right factory
+covariance is unknown, never exact zero. An alignment made with a rig requires
+that same rig at the accuracy step, so omitting the option cannot bypass gating.
 
 Supply symmetric positive semidefinite 3×3 covariances in m² for the base in ENU
 and the lever arm in FLU, and an attitude axis 1σ in radians. The small-angle model

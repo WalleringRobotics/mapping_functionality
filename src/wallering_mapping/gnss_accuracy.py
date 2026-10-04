@@ -404,26 +404,22 @@ def gps_bracket(rows, times, exposure, max_age_ns):
 
 # Profile fields the rig calibration supplies; a non-default profile value is overridden with a warning.
 RIG_FIELDS = [("rig", "antenna_to_camera_flu_m"), ("rig", "lever_covariance_flu_m2"),
-              ("rig", "calibration_evidence"), ("rig", "lever_from_receiver_reference_verified"),
-              ("motion", "camera_latency_bound_ms")]
+              ("rig", "calibration_evidence"), ("rig", "lever_from_receiver_reference_verified")]
 
 
 def apply_rig_calibration(profile, path, session, alignment_report):
-    """Effective rig/motion sections: lever, lever covariance and camera latency from the calibration."""
+    """Spatial calibration only; profile exposure latency and body-attitude bounds remain required."""
     context = rig_context(path, session, alignment_report["stream"])
     applied = (alignment_report.get("rig_calibration") or {}).get("sha256")
     if applied != context["report"]["sha256"]:
         raise ValueError("Alignment was not produced with this rig calibration; rerun sync --rig-calibration")
     lever = context["calibration"].antenna_to_camera(context["camera"], context["factory"])
-    offset = context["offset"]
     values = {
         "antenna_to_camera_flu_m": lever and lever["antenna_to_camera_flu_m"],
         "lever_covariance_flu_m2": lever and lever["lever_covariance_flu_m2"],
         "calibration_evidence": f"rig calibration sha256 {context['report']['sha256']}",
         # The calibrated antenna frame is the ARP; an APC/unknown receiver reference cannot match it.
         "lever_from_receiver_reference_verified": profile["receiver"]["position_reference"] == "ARP",
-        "camera_latency_bound_ms": None if offset is None or offset["sigma_ns"] is None
-        else offset["sigma_ns"] / 1e6,
     }
     if lever is not None and np.linalg.norm(lever["antenna_to_camera_flu_m"]) > 20:
         raise ValueError("Invalid calibrated antenna-to-camera lever arm in body FLU metres")
@@ -435,7 +431,8 @@ def apply_rig_calibration(profile, path, session, alignment_report):
         effective[section][name] = values[name]
     report = {**context["report"], "antenna_lever": lever, "effective_rig": effective["rig"],
               "effective_motion": effective["motion"],
-              "camera_latency": "OAK->PX4 offset 1-sigma; already inside estimated_alignment_budget_ms"}
+              "camera_latency": "Profile bound required; ROS gyro offset sigma is not an exposure latency bound",
+              "attitude_uncertainty": "Profile body-attitude uncertainty; mounting sigma is a different quantity"}
     return effective["rig"], effective["motion"], report, warnings
 
 
@@ -476,7 +473,7 @@ def image_accuracy(session, alignment, profile_path, output, project=None, rig_c
             profile, rig_calibration, session, alignment_report
         )
     elif alignment_report.get("rig_calibration"):
-        warnings.append("Alignment applied a rig calibration; the profile lever arm and latency are used")
+        raise ValueError("Alignment has a rig calibration; supply the same --rig-calibration to preserve gating")
     config = json.loads((session / "manifest.json").read_text())["telemetry"]["config"]
     ros = ClockMap([r for r in jsonl(session / "telemetry.jsonl") if r["record_type"] == "clock"])
     syncs = [r for r in jsonl(session / "telemetry.jsonl") if r.get("role") == "timesync"]
@@ -728,8 +725,7 @@ def image_accuracy(session, alignment, profile_path, output, project=None, rig_c
                 association["estimated_alignment_budget_ms"]
                 + gps["clock_budget_ns"] / 1e6
                 + motion["receiver_latency_bound_ms"]
-                # A calibrated OAK->PX4 offset sigma is already in the alignment budget.
-                + (0 if calibration_report else motion["camera_latency_bound_ms"])
+                + motion["camera_latency_bound_ms"]
             ) / 1000
             interpolation_allowance = (
                 0.5
