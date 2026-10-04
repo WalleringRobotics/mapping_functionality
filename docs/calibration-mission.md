@@ -76,3 +76,58 @@ The generated sidecar always says `flight_ready: false`, with QGC, PX4 SITL,
 recorder/solver SITL and operator sign-off **pending**. Preserve it unchanged;
 store measured acceptance and the hashes it covers in a separate private report.
 These acceptance steps remain outstanding for issue #16.
+
+## Offline flight phase extraction
+
+The recorder retains `/mavros/mission/reached` when published. After the recording
+has completed and been sealed, extract the original events without touching it:
+
+```bash
+wr-map calibrate flight-phases runs/flight-session \
+  --plan runs/calibration-flight/example.plan \
+  --phase-map runs/calibration-flight/example.plan.phases.json \
+  --output runs/flight-phase-review
+```
+
+The default output is diagnostic. `flight-phases.json` preserves every reached
+sequence, original header stamp/frame and bag receipt timestamp. Candidate windows
+are only the intervals between ordered endpoints, with a destination-phase hint.
+They include an unknown mixture of motion, settling and hold time. They do not
+establish actual movement onset, exposure alignment or axis excitation, and
+`solver_window_qualified` remains false.
+
+To qualify **sequence labeling only**, review the mission downloaded from PX4 in
+the same SITL/flight session, compare each index/command to this exact plan, and
+write a separate review JSON beside that downloaded artifact:
+
+```json
+{
+  "schema_version": 1,
+  "operator": "reviewer name",
+  "plan_sha256": "SHA256 of example.plan",
+  "phase_map_sha256": "SHA256 of example.plan.phases.json",
+  "zero_based_px4_items_match": true,
+  "downloaded_mission": {
+    "path": "downloaded-mission.json",
+    "sha256": "SHA256 of that downloaded artifact"
+  }
+}
+```
+
+Pass `--verified-numbering --numbering-evidence PATH` only after this review.
+Changing either mission/map or downloaded artifact invalidates the binding.
+Missing navigation endpoints, reordered/duplicate indices, restarts, unknown
+indices or invalid clocks leave the entire extraction unqualified; original
+events remain visible for diagnosis. Non-navigation commands need not emit
+reached events. Changing `sequence_mapping_verified` in the generated phase map
+does not substitute for this explicit review. `passed` refers only to this
+sequence check, while `survey_ready` always remains false.
+
+### Runtime prerequisite check
+
+Before claiming simulator acceptance, locate and record the QGC executable, PX4
+checkout/build or runtime image, simulator version and synthetic camera/IMU bridge.
+Check executable paths, known installation/checkout roots and existing images
+read-only; retain the dated environment inventory under ignored `runs/`. A mapping
+runtime image alone does not provide a PX4 simulator. If these components are
+unavailable, leave QGC/SITL acceptance pending and report provisioning as the blocker.
