@@ -26,7 +26,7 @@ does not change any acceptance gate, and it does not qualify any result.
 - No recording has been made while the rig moved, on foot or in the air.
 - No reconstruction has been run on our own imagery. The static bench bag was only imported and prepared.
 - No calibration has been solved from real data. Every rig transform, lever arm and time offset is still unmeasured.
-- No RTK-fixed position has been observed. The current receiver reports a 3D fix with about 3.5 m horizontal and 5.1 m vertical uncertainty.
+- No RTK-fixed position has been observed. The fitted receiver is a Holybro H-RTK F9P Helical (u-blox ZED-F9P, dual-band, DroneCAN). Without corrections it reported a 3D fix with about 3.5 m horizontal and 5.1 m vertical uncertainty on the bench.
 - No GCPs or checkpoints have been surveyed.
 
 ### Soak audited in this review
@@ -69,8 +69,8 @@ decision.
 |---|---|---|---|---|
 | B1 | **Airframe integration is undocumented.** Mount, power, cabling, vibration isolation and centre of gravity of the OAK and Orin on the vehicle are not recorded in this repository. | Flight | Operator | Needs a photo, mass, a hover test and a vibration log before any mapping flight |
 | B2 | **No ground-control points or checkpoints.** Without them no absolute accuracy can be claimed. | Accuracy | Operator | Needs targets and a survey-grade GNSS rover or total station |
-| B3 | **The GNSS receiver is not RTK-capable as far as we can tell.** A reported 3.5 m horizontal accuracy points to a single-band receiver. | Direct georeferencing | Operator decision | Confirm the receiver model. RTK needs a dual-band RTK receiver such as a ZED-F9P class unit |
-| B4 | **No correction source is chosen.** No NTRIP caster, mount point or surveyed base exists in configuration. | RTK | Operator decision | A network CORS mount gives datum-tied corrections; a self-surveyed base does not |
+| B3 | **RTCM corrections cannot reach the receiver yet.** The receiver is RTK-capable, but it is on DroneCAN. PX4 forwards MAVLink RTCM to a DroneCAN receiver only when `UAVCAN_PUB_RTCM=1`, which needs a reboot. The MAVROS `gps_rtk` status topic has never published. | RTK | Operator approval, then agent | Writing a persistent PX4 parameter needs the operator's approval. Verified in PX4 v1.17 source: `src/drivers/uavcan/sensors/gnss.cpp` maps DroneCAN RTK fixed to fix type 6 |
+| B4 | **No correction source is chosen.** No NTRIP caster, mount point or surveyed base exists in configuration. | RTK | Operator decision | The repository's NTRIP bridge supports a **single-base mount only**. VRS or network mounts that need the rover's GGA position are not supported. A national CORS single-station mount gives datum-tied corrections; a self-surveyed base does not |
 | B5 | **Rig calibration is unmeasured.** No guided session (#8), no real solves (#9, #10), no tape-measured lever arms. | Direct georeferencing; survey gate | Operator, then agent | About one bench hour plus solver review |
 | B6 | **PX4 timing almost never meets the qualification gate.** The gate needs 501 consecutive TIMESYNC samples, about 50 s, each with RTT under 10 ms and residual at most 2 ms. The 20-minute soak qualified 26 of 11,999 samples. The 20 fps candidate qualified none. | Every capture's timing qualification, so every image stays unqualified for geolocation | Agent, then operator decision | The offset itself looks good: residual p95 is 1.1 ms. Rare RTT outliers reset the streak. Options are to find the outlier source or to change the gate so isolated outliers are rejected rather than resetting it |
 | B7 | **RGB is rolling shutter and its readout time is unmeasured** (#14). Motion skews the image during readout. | Map quality when moving | Agent and operator | Fly slowly at first. Process the global-shutter left mono stream as a comparison. Use ODM rolling-shutter correction with a stated readout time |
@@ -96,9 +96,9 @@ height above ground.
 | Today: standalone GNSS, no GCPs | 1.5–5 m absolute | 3–8 m absolute | Nothing new. Relative accuracy inside the model is about 2–5 cm, but scale can be off by 1–2 % |
 | SBAS or code DGPS, no GCPs | 0.5–1.5 m | 1–3 m | DGPS corrections to the existing receiver. Little benefit for mapping; the repository's image gate also rejects DGPS (fix type 4) |
 | GCPs plus checkpoints, any GNSS | 2–4 cm | 3–6 cm | 5–8 surveyed targets per site. Independent of timing calibration. **Lowest-risk route to an accurate first map** |
-| RTK fixed via NTRIP, uncalibrated timing and lever arms | 5–15 cm | 8–20 cm | RTK receiver and caster. The timing uncertainty of 10–30 ms at 3 m/s dominates |
-| RTK fixed via NTRIP, calibrated timing (≤ 2 ms) and lever arms (±1 cm), no GCPs | 2–4 cm | 4–8 cm | B3, B4, B5, B6 and #14 closed. Keep at least one checkpoint to detect datum and vertical bias |
-| RTK or PPK plus GCPs | 1.5–3 cm | 2–4 cm | Everything above. Best achievable with this camera; limited by 1 cm GSD and rolling shutter |
+| RTK fixed via NTRIP, uncalibrated timing and lever arms | 5–15 cm | 8–20 cm | The fitted F9P, a PX4 parameter change and a caster. The timing uncertainty of 10–30 ms at 3 m/s dominates |
+| RTK fixed via NTRIP, calibrated timing (≤ 2 ms) and lever arms (±1 cm), no GCPs | 2–4 cm | 4–8 cm | B3 to B6 and #14 closed. Keep at least one checkpoint to detect datum and vertical bias |
+| RTK plus GCPs | 1.5–3 cm | 2–4 cm | Everything above. Best achievable with this camera; limited by 1 cm GSD and rolling shutter |
 
 Budget behind the calibrated RTK row, per camera centre (1σ): receiver 1–2 cm
 horizontal and 2–3 cm vertical, plus 1 ppm of base distance; timing 2 ms × 3 m/s
@@ -107,13 +107,17 @@ coordinates matter most of all. A base that was only surveyed in by averaging ca
 1–2 m off in absolute terms while every result looks consistent. A network CORS
 mount, or a base tied to one, avoids this.
 
-**PPK** gives the same accuracy as RTK without a live correction link. It needs the
-rover to log raw observations and a base log for the same period. This is worth
-choosing if the radio or cellular link at the site is unreliable.
+**PPK** would give the same accuracy as RTK without a live correction link, but
+it needs the rover's raw observations. PX4 logs those only from a serial u-blox
+receiver (`GPS_DUMP_COMM` in the serial GPS driver). The fitted receiver is on
+DroneCAN, so PPK would need a separate raw-data connection to the F9P. Plan on
+live RTK unless the site has no reliable network.
 
 **Recommendation.** Make the first map accurate with GCPs, not with RTK. That
-removes timing and lever-arm calibration from the critical path. Add RTK as a
-second track for direct georeferencing, and judge it against the same checkpoints.
+removes timing and lever-arm calibration from the critical path. Because the RTK
+receiver is already fitted, bring RTK up in parallel and record it on every
+recording from Phase 2 onward. Judge direct georeferencing against the same
+checkpoints.
 
 ## 4. Plan
 
@@ -143,9 +147,10 @@ and 1B can run in parallel. Only one agent or session may own the OAK at a time.
 
 1. Provision the x86-64 workstation with Docker and the pinned ODM image (`deploy/setup-postprocessing.sh`). Run `wr-map doctor`.
 2. Choose a test site with texture and open sky. Lay out 5–8 GCPs and 3–5 separate checkpoints and survey them, recording CRS, vertical datum and uncertainty.
-3. Decide on the GNSS route: decisions 1 and 2 in section 5 (blockers B3 and B4).
+3. Choose the correction source (decision 2 in section 5). After approval, set `UAVCAN_PUB_RTCM=1`, reboot, run `wr-map ntrip` and confirm RTK fixed on the ground with the fitted F9P (B3, B4).
+4. Record the receiver's uncertainty convention and timestamp mode in the private GNSS profile, as `docs/rtk-accuracy.md` requires.
 
-**Gate:** workstation processes the CI sample; surveyed points exist for the site.
+**Gate:** workstation processes the CI sample; surveyed points exist for the site; RTK fixed is observed with corrections forwarded through MAVROS.
 
 ### Phase 2: ground-moving rehearsal (operator with agent, half a day)
 
@@ -169,14 +174,13 @@ for 5–10 minutes. This is the first moving recording, and it carries no flight
 
 ### Phase 4: RTK direct georeferencing (later)
 
-1. Fit an RTK-capable receiver if B3 confirms the need. Configure the NTRIP mount and verify RTK fixed on the ground.
-2. Fly the same site. Process once without GCPs, then compare with the checkpoints.
-3. Continue with optical timing (#14) and the in-flight calibration mission (#16) only if direct georeferencing misses its target.
+1. Fly the same site with RTK fixed throughout. Process once without GCPs, then compare with the checkpoints.
+2. Continue with optical timing (#14) and the in-flight calibration mission (#16) only if direct georeferencing misses its target.
 
 ## 5. Decisions needed from the operator
 
-1. **Receiver.** Which GNSS module is on the PX4? Is an RTK-capable dual-band receiver available or to be purchased?
-2. **Corrections.** Which NTRIP caster and mount point, or a surveyed base of our own? Is PPK acceptable instead of live RTK?
+1. **RTK parameter.** The receiver is answered: an H-RTK F9P Helical is fitted. May an agent set `UAVCAN_PUB_RTCM=1` on the Pixhawk 6X? It is persistent and needs a reboot.
+2. **Corrections.** Which NTRIP caster and single-base mount point, or a surveyed base of our own?
 3. **Accuracy target.** What horizontal and vertical accuracy does the first deliverable need? That decides whether GCPs alone are enough.
 4. **Airframe.** Which vehicle carries the rig, and what is its payload margin?
 5. **Site.** Where is the first test site, and what flight approvals apply?
