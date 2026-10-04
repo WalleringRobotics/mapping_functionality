@@ -29,3 +29,15 @@ def test_mission_cli_writes_unqualified_plan_and_matching_phase_map(tmp_path, ca
     phases = json.loads(Path(report["phases"]).read_text())
     assert phases["plan_sha256"] == report["plan_sha256"]
     assert json.loads(output.read_text())["fileType"] == "Plan"
+
+
+def test_nested_flight_phase_cli_cannot_claim_unverified_sequence(tmp_path, capsys):
+    from test_calibration_flight import fixture
+    root, plan, phases, _ = fixture(tmp_path)
+    output = tmp_path / "phases-output"
+    assert cli.main(["calibrate", "flight-phases", str(root), "--plan", str(plan),
+                     "--phase-map", str(phases), "--output", str(output)]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert not report["sequence_qualified"]
+    assert not report["survey_ready"]
+    assert (output / "flight-phases.json").is_file()

@@ -166,9 +166,12 @@ def parser():
     from .calibration_mission import add_arguments
     mission = commands.add_parser("calibrate-mission", help="Generate a bounded offline QGroundControl mission draft")
     add_arguments(mission)
+    from .calibration_flight import add_arguments as flight_arguments
+    flight = commands.add_parser("calibrate-flight-phases", help="Extract sealed mission progress with numbering evidence")
+    flight_arguments(flight)
     calibration = commands.add_parser("calibrate", help="Record, solve and verify rig calibration")
     modes = calibration.add_subparsers(dest="calibration_command", required=True)
-    for name in ("record", "solve", "camera", "mission", "phases"):
+    for name in ("record", "solve", "camera", "mission", "flight-phases"):
         flat = f"calibrate-{name}"
         if flat in commands.choices:
             mode = modes.add_parser(name, parents=[commands.choices[flat]], add_help=False)
@@ -182,6 +185,11 @@ def main(argv=None):
         if args.command == "calibrate-mission":
             from .calibration_mission import run
             result = run(args)
+        elif args.command == "calibrate-flight-phases":
+            from .calibration_flight import run
+            result = run(args)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
         elif args.command == "inspect":
             from .oak import inspect_device
             result = inspect_device(args.device_id)
