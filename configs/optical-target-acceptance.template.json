@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "physical_optical_target_acceptance",
+  "status": "pending",
+  "operator": null,
+  "utc_date": null,
+  "hardware_versions": null,
+  "camera_modes_exposure_focus": null,
+  "instrument_clock_and_bridge": null,
+  "instrument_calibration_and_uncertainty": null,
+  "target_dimensions_units_flatness_uncertainty": null,
+  "predeclared_limits_and_budget_rationale": null,
+  "artifacts": [],
+  "artifact_entry_format": {"path": null, "sha256": null, "role": null},
+  "analysis_revision_and_command": null,
+  "optical_timing": {
+    "status": "pending", "attempted_events": null, "accepted_events": null,
+    "rejections": null, "stamp_semantics_and_offset_equation": null,
+    "offset_ns": null, "sigma_ns": null, "heldout_max_residual_ns": null,
+    "clock_bridge_bound_ns": null, "load_restart_repeatability": null
+  },
+  "rgb_readout": {
+    "status": "pending", "row_coordinate_definition": null,
+    "row_period_ns": null, "full_frame_readout_ns": null,
+    "uncertainty_ns": null, "heldout_residuals": null
+  },
+  "target_verification": {
+    "status": "pending", "fit_view_ids": null, "heldout_view_ids": null,
+    "corner_residuals_by_camera_radius_distance": null,
+    "stereo_rotation_baseline_and_uncertainty": null,
+    "camera_imu_crosscheck": null
+  },
+  "operator_review": null,
+  "survey_readiness_claim": false
+}
