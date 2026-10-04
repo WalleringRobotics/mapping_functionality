@@ -39,6 +39,18 @@ def parser():
     ownership.add_argument("--camera-only", action="store_true")
     ownership.add_argument("--start-mavros", action="store_true", help="Own MAVROS for this session; otherwise reuse it")
     record.add_argument("--fcu-url", default="/dev/ttyUSB0:921600")
+    record.add_argument("--px4-imu-rate", type=int, choices=[0, 100], default=0,
+                        help="Request PX4 IMU Hz per session (existing MAVROS only); 0 leaves streams alone")
+    calibration_record = commands.add_parser("calibrate-record", help="110-second guided motion recording")
+    calibration_record.add_argument("--output", type=Path, required=True)
+    calibration_record.add_argument("--config", type=Path, default=Path("configs/oakd-ros-calibration.yaml"))
+    calibration_record.add_argument("--device-id")
+    calibration_record.add_argument("--warmup", type=nonnegative_integer, default=60)
+    calibration_record.add_argument("--require-mount", type=Path)
+    calibration_record.add_argument("--camera-only", action="store_true")
+    calibration_record.add_argument("--px4-imu-rate", type=int, choices=[0, 100], default=100,
+                                    help="100 requests matched PX4 rates; 0 preserves existing rates")
+    calibration_record.set_defaults(duration=110, start_mavros=False, fcu_url="/dev/ttyUSB0:921600")
     bag_import = commands.add_parser("bag-import", help="Offline lossless image import from a sealed ROS recording")
     bag_import.add_argument("session", type=Path)
     bag_import.add_argument("--output", type=Path, required=True)
@@ -193,7 +205,7 @@ def main(argv=None):
         elif args.command == "inspect":
             from .oak import inspect_device
             result = inspect_device(args.device_id)
-        elif args.command in {"record", "capture"}:
+        elif args.command in {"record", "capture", "calibrate-record"}:
             import os
             repo = Path(__file__).resolve().parents[2]
             launcher = repo / "deploy/run-ros.sh"
@@ -202,7 +214,12 @@ def main(argv=None):
             command = ["bash", str(launcher), "bash", str(repo / "deploy/record-rosbag.sh"),
                        "--output", str(args.output.resolve()), "--config", str(args.config.resolve()),
                        "--duration", str(args.duration), "--warmup", str(args.warmup),
-                       "--fcu-url", args.fcu_url]
+                       "--fcu-url", args.fcu_url,
+                       "--px4-imu-rate", str(0 if args.camera_only else args.px4_imu_rate)]
+            if args.command == "calibrate-record":
+                command.extend(["--kind", "calibration"])
+                print("Calibration: props off, support the rigid rig, protect cables, and keep "
+                      "a textured scene at least 2 m away. Wait for the live motion prompts.", flush=True)
             for flag, value in (("--device-id", args.device_id), ("--require-mount", args.require_mount)):
                 if value:
                     command.extend([flag, str(value)])

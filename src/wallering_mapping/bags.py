@@ -1,6 +1,7 @@
 """Offline rosbag2/MCAP auditing and import. This module never acquires live data."""
 
 import dataclasses
+import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -54,6 +55,11 @@ def check_seal(root):
         checked.add(Path(relative).as_posix())
     required = {p.relative_to(root).as_posix() for p in (root / "bag").glob("*.mcap")}
     required |= {"bag/metadata.yaml", "oak-requested.yaml", "oak-parameters.yaml", "mcap.yaml", "topics.txt"}
+    # Every present input is immutable, including factory calibration, phase/rate
+    # logs and copied transport profiles. Backward-compatible with older sessions
+    # that did not produce those optional provenance files.
+    required |= {p.relative_to(root).as_posix() for p in root.rglob("*")
+                 if p.is_file() and p.name not in {"state", "SHA256SUMS"}}
     if any((root / name).exists() for name in ("acquisition-start-ns.txt", "acquisition-end-ns.txt")):
         required |= {"acquisition-start-ns.txt", "acquisition-end-ns.txt"}
     if "/mavros/state" in (root / "topics.txt").read_text().splitlines():
@@ -110,6 +116,90 @@ def connection_window(samples, start, end):
             "connected_throughout_window": bool(states) and all(states)}
 
 
+# BNO086 rate points; the driver rounds requests up. /oak/imu/data follows the
+# sensor that is not interpolated (COPY emits at about the gyro rate).
+BNO086_HZ = {"i_gyro_freq": (25, 33, 50, 100, 200, 400), "i_acc_freq": (15, 31, 62, 125, 250, 500)}
+IMU_MESSAGE_RATE = {"LINEAR_INTERPOLATE_GYRO": "i_acc_freq"}
+
+
+def imu_message_rate(imu):
+    """Nominal /oak/imu/data message rate implied by the driver IMU parameters."""
+    key = IMU_MESSAGE_RATE.get(imu.get("i_sync_method"), "i_gyro_freq")
+    requested = imu[key]
+    return next((rate for rate in BNO086_HZ[key] if rate >= requested), requested)
+
+
+def sample_loss(stamps, start, end, rate_hz=None, values=None):
+    """In-window sample count against the requested rate, header-stamp gaps and repeats.
+
+    A gap is an interval over 1.5 nominal periods (1/rate, or the median interval when
+    no rate is requested), so a single lost sample counts. missing_samples compares the count with rate x window;
+    missing_in_gaps sums whole periods absent inside gaps. Values, when given, are
+    per-message tuples whose consecutive repeats are counted (for example gyro samples).
+    """
+    if end < start or (rate_hz is not None and (not np.isfinite(rate_hz) or rate_hz <= 0)):
+        raise ValueError("Invalid sample window or nominal rate")
+    stamps = np.asarray(stamps, dtype=np.int64)
+    inside = (stamps >= start) & (stamps <= end)
+    window = stamps[inside]
+    result = {"window_seconds": (end - start) / 1e9, "samples": int(window.size),
+              "requested_hz": rate_hz, "expected_samples": None, "missing_samples": None,
+              "loss_percent": None, "gaps": 0, "max_gap_ms": None, "missing_in_gaps": 0,
+              "repeated_samples": None, "measured_hz": None,
+              "hardware_sample_loss": None, "invalid_intervals": 0,
+              "count_basis": "nominal rate times duration; boundary phase and clock drift are unknown"}
+    if window.size >= 2:
+        intervals = np.diff(window) / 1e6
+        result["invalid_intervals"] = int((intervals <= 0).sum())
+        positive = intervals[intervals > 0]
+        period = 1000 / rate_hz if rate_hz else (float(np.median(positive)) if positive.size else None)
+        if period:
+            gaps = intervals[intervals > 1.5 * period]
+            result.update(nominal_period_ms=period, gaps=int(gaps.size),
+                          max_gap_ms=float(gaps.max()) if gaps.size else None,
+                          missing_in_gaps=int(sum(round(gap / period) - 1 for gap in gaps)))
+        if not result["invalid_intervals"]:
+            result["measured_hz"] = (window.size - 1) * 1e9 / float(window[-1] - window[0])
+    if rate_hz:
+        expected = round(rate_hz * (end - start) / 1e9)
+        result.update(expected_samples=expected, missing_samples=max(0, expected - int(window.size)))
+    else:
+        result.update(expected_samples=int(window.size) + result["missing_in_gaps"],
+                      missing_samples=result["missing_in_gaps"])
+    if result["expected_samples"]:
+        result["loss_percent"] = 100 * result["missing_samples"] / result["expected_samples"]
+    if values is not None:
+        selected = np.asarray(values, dtype=float)[inside]
+        result["repeated_samples"] = (int(np.all(selected[1:] == selected[:-1], axis=1).sum())
+                                      if selected.size else 0)
+    return result
+
+
+def mavlink_window(packets, start, end):
+    """Observe raw-link receipt load and modulo-256 gaps; not hardware loss proof."""
+    selected = [row for row in packets if start <= row[0] <= end]
+    previous, gaps, duplicates, reorder = {}, 0, 0, 0
+    for _, system, component, sequence, _ in selected:
+        key = (system, component)
+        if key in previous:
+            step = (sequence - previous[key]) % 256
+            if step == 0:
+                duplicates += 1
+                continue
+            if step > 127:
+                reorder += 1
+                continue
+            gaps += step - 1
+        previous[key] = sequence
+    seconds = (end - start) / 1e9
+    return {"messages": len(selected), "duration_seconds": seconds,
+            "received_wire_bytes_per_second": sum(row[4] for row in selected) / seconds if seconds > 0 else None,
+            "inferred_sequence_gaps": gaps, "duplicate_sequences": duplicates,
+            "reordered_or_reset_sequences": reorder,
+            "limitation": "Receipt-side estimate; ROS loss, source restart, routing and wrap ambiguity remain. "
+                          "Wire load excludes outbound traffic; serial baud capacity is not inferred."}
+
+
 def audit_bag(root):
     root = Path(root).resolve()
     report = {"schema_version": 1, "format": "rosbag2_mcap", "valid": False,
@@ -123,6 +213,26 @@ def audit_bag(root):
         if (root / "state").read_text().strip() != "complete":
             raise ValueError("Recording did not finish cleanly")
         parameters = requested_parameters(root)
+        session_path = root / "session.json"
+        session = json.loads(session_path.read_text()) if session_path.exists() else {"kind": "survey"}
+        report["kind"] = session["kind"]
+        if report["kind"] not in {"survey", "calibration"}:
+            raise ValueError("Unknown recording kind")
+        px4_rate = session.get("px4_imu_requested_hz", 0)
+        if px4_rate not in {0, 100}:
+            raise ValueError("Invalid session PX4 rate request")
+        if px4_rate:
+            for name in ("px4-rate-request.json", "px4-rate-restore.json"):
+                evidence = json.loads((root / name).read_text())
+                report[name.removesuffix(".json").replace("-", "_")] = evidence
+                expected_rate = px4_rate if name == "px4-rate-request.json" else 0
+                rows = evidence.get("requests", [])
+                if (not evidence.get("success") or evidence.get("command") != 511
+                        or evidence.get("requested_hz") != expected_rate
+                        or [r.get("message_id") for r in rows] != [105, 31]
+                        or any(not r.get("success") or r.get("ack_result") != 0
+                               or r.get("requested_hz") != expected_rate for r in rows)):
+                    report["errors"].append(f"PX4 rate command unsuccessful: {name}")
         from ruamel.yaml import YAML
         actual = YAML(typ="safe").load((root / "oak-parameters.yaml").read_text())["/oak"]["ros__parameters"]
         report["driver_parameters"] = {name: actual[name] for name in (*CAMERAS, "imu")}
@@ -144,9 +254,13 @@ def audit_bag(root):
                                            for t in CAMERAS.values()] + [IMU]
         if "/mavros/state" in topics:
             required += list(PX4_REQUIRED)
+        if px4_rate:
+            required += ["/mavros/imu/data", *PX4_REQUIRED]
         received, headers = defaultdict(list), defaultdict(list)
         observed, geometry = Counter(), {}
         imu_values, sync_rows, gnss = [], [], defaultdict(list)
+        sync_receipts, mavlink_packets = [], []
+        gyro, imu_topics = defaultdict(list), set()
         connected = []
         with reader(root) as bag:
             metadata_counts = Counter()
@@ -159,6 +273,13 @@ def audit_bag(root):
                 received[topic].append(receipt)
                 if hasattr(message, "header"):
                     headers[topic].append(stamp(message))
+                    if connection.msgtype == "sensor_msgs/msg/Imu":
+                        imu_topics.add(topic)
+                        rate = message.angular_velocity
+                        gyro[topic].append((rate.x, rate.y, rate.z))
+                        vectors = (message.angular_velocity, message.linear_acceleration)
+                        if not all(np.isfinite(getattr(v, axis)) for v in vectors for axis in "xyz"):
+                            raise ValueError(f"Nonfinite IMU values: {topic}")
                 if topic in CAMERAS.values():
                     image_array(message)
                     shape = (message.width, message.height, message.encoding, message.header.frame_id)
@@ -178,6 +299,13 @@ def audit_bag(root):
                     connected.append((receipt, bool(message.connected)))
                 if topic == "/mavros/timesync_status":
                     sync_rows.append(plain(message))
+                    sync_receipts.append(receipt)
+                if topic == "/uas1/mavlink_source":
+                    wire_bytes = int(message.len) + (12 if message.magic == 253 else 8)
+                    if message.magic == 253 and message.incompat_flags & 1:
+                        wire_bytes += 13
+                    mavlink_packets.append((receipt, int(message.sysid), int(message.compid),
+                                            int(message.seq), wire_bytes))
                 if topic in {"/mavros/global_position/global", "/mavros/global_position/raw/fix"}:
                     gnss[topic].append(int(message.status.status))
             if dict(observed) != {k: v for k, v in metadata_counts.items() if v}:
@@ -191,11 +319,13 @@ def audit_bag(root):
                 "first_header_stamp_ros_ns": source[0] if source else None,
                 "last_header_stamp_ros_ns": source[-1] if source else None}
             report["topics"][topic] = item
+            if topic in ("/mavros/imu/data_raw", "/mavros/imu/data") and px4_rate:
+                item["requested_hz"] = px4_rate
             if topic in list(CAMERAS.values()) + [IMU]:
                 if any(t <= 0 for t in source) or any(t <= 0 for t in intervals):
                     report["errors"].append(f"Nonmonotonic/invalid source timestamps: {topic}")
                 stream = next((s for s, t in CAMERAS.items() if t == topic), None)
-                expected = parameters[stream]["i_fps"] if stream else parameters["imu"]["i_gyro_freq"]
+                expected = parameters[stream]["i_fps"] if stream else imu_message_rate(parameters["imu"])
                 item["requested_hz"] = expected
                 if len(source) < 2 or (source[-1] - source[0]) <= 0:
                     report["errors"].append(f"Insufficient source samples: {topic}")
@@ -252,8 +382,37 @@ def audit_bag(root):
         report["missing_optional_topics"] = [t for t in topics if not observed[t] and t not in required]
         if report["missing_optional_topics"]:
             report["warnings"].append("Some requested optional topics have no messages")
-        if report["topics"].get(IMU, {}).get("intervals_over_1_5_periods"):
-            report["warnings"].append("IMU timestamps have irregular intervals; hardware sample loss is unknown")
+        for topic in [*CAMERAS.values(), *sorted(imu_topics)]:
+            source = headers.get(topic)
+            if not source:
+                continue
+            window = (start, end) if "coverage_window" in report else (source[0], source[-1])
+            loss = sample_loss(source, *window, report["topics"][topic].get("requested_hz"),
+                               gyro[topic] if topic in imu_topics else None)
+            report["topics"][topic]["in_window"] = loss
+            if topic in imu_topics and loss["invalid_intervals"]:
+                report["errors"].append(f"Nonmonotonic IMU stamps in acquisition window: {topic}")
+            if topic in ("/mavros/imu/data_raw", "/mavros/imu/data") and px4_rate:
+                if loss["measured_hz"] is None or loss["measured_hz"] < .95 * px4_rate:
+                    report["errors"].append(f"PX4 IMU rate below 95% of request: {topic}")
+            # Repeats alone are not flagged: a stationary, quantised gyro repeats by chance.
+            if topic in imu_topics and loss["gaps"]:
+                expected = (f"{loss['expected_samples']} expected at {loss['requested_hz']} Hz"
+                            if loss["requested_hz"] else "rate unrequested")
+                report["warnings"].append(
+                    f"IMU sample loss estimate in acquisition window: {topic} {loss['samples']} samples, "
+                    f"{expected} ({loss['loss_percent']:.2f}% missing), {loss['gaps']} gaps "
+                    f"(max {loss['max_gap_ms'] or 0:.0f} ms, {loss['missing_in_gaps']} samples), "
+                    f"{loss['repeated_samples']} repeated")
+        if report["kind"] == "calibration":
+            from .recording import CALIBRATION_PHASES
+            phases = json.loads((root / "calibration-phases.json").read_text())
+            report["calibration_phases"] = phases
+            rows = phases.get("phases", [])
+            if [p.get("phase") for p in rows] != [p[1] for p in CALIBRATION_PHASES]:
+                report["errors"].append("Calibration guidance did not complete all phases")
+            elif end - rows[-1]["started_utc_ns"] < (CALIBRATION_PHASES[-1][0] - .5) * 1e9:
+                report["errors"].append("Calibration final still phase was cut short")
         if sync_rows:
             from .telemetry_config import TelemetryConfig
             from .timing import SyncMonitor
@@ -271,6 +430,23 @@ def audit_bag(root):
                 "offset_residual_ms": distribution([q["offset_residual_ns"] / 1e6 for q in qualities])}
             if not report["timesync"]["qualified_samples"]:
                 report["warnings"].append("PX4 timing did not satisfy the existing qualification gate")
+            windows = {"acquisition": (start, end)}
+            requests = report.get("px4_rate_request", {}).get("requests", [])
+            if requests and all_receipts:
+                windows["before_rate_request"] = (min(all_receipts), requests[0]["requested_utc_ns"])
+            report["link_windows"] = {}
+            for name, (window_start, window_end) in windows.items():
+                indices = [i for i, t in enumerate(sync_receipts) if window_start <= t <= window_end]
+                pose_times = [t for t in received["/mavros/local_position/pose"]
+                              if window_start <= t <= window_end]
+                report["link_windows"][name] = {
+                    "mavlink_source": mavlink_window(mavlink_packets, window_start, window_end),
+                    "pose_received_hz": ((len(pose_times) - 1) * 1e9 / (pose_times[-1] - pose_times[0])
+                                         if len(pose_times) > 1 and pose_times[-1] > pose_times[0] else None),
+                    "timesync_samples": len(indices),
+                    "timesync_qualified_samples": sum(qualities[i]["qualification"] == "qualified" for i in indices),
+                    "rtt_ms": distribution([sync_rows[i]["round_trip_time_ms"] for i in indices]),
+                    "offset_residual_ms": distribution([qualities[i]["offset_residual_ns"] / 1e6 for i in indices])}
         report["valid"] = not report["errors"]
         report["capture_ready"] = report["valid"] and report["coverage_complete"]
     except Exception as error:
@@ -294,7 +470,9 @@ def import_bag(root, output):
     calibration = {"source": "ROS CameraInfo", "cameras": audit["cameras"]}
     device = {"adapter": "official_depthai_ros_driver", "imu_enabled": False,
               "hardware_sequence_numbers": False, "sequence_origin": "bag_ordinal",
-              "timestamp_domain": "ros_header", "stream_settings": {}}
+              "timestamp_domain": "ros_header", "stream_settings": {
+                  name: {"fps": parameters[name]["i_fps"], "resolution": parameters[name]["i_resolution"]}
+                  for name in CAMERAS}}
     session = Session(output, config, "rosbag2", device, calibration)
     session.manifest["rosbag_source"] = {
         "path": str(root), "seal_sha256": sha256_file(root / "SHA256SUMS"),

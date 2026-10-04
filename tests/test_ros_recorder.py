@@ -13,7 +13,7 @@ pytest.importorskip('launch')
 pytest.importorskip('launch_ros')
 
 
-@pytest.mark.parametrize('mode', ['timed', 'interrupt', 'driver_failure', 'recorder_failure', 'preflight_failure'])
+@pytest.mark.parametrize('mode', ['timed', 'interrupt', 'calibration_interrupt', 'driver_failure', 'recorder_failure', 'preflight_failure'])
 def test_launch_owns_children_and_only_clean_recordings_are_sealed(tmp_path, mode):
     real_ros2 = shutil.which('ros2')
     assert real_ros2
@@ -71,14 +71,19 @@ elif args[:2] == ['bag', 'info']:
     env = {**os.environ, 'PATH': f'{tmp_path}:{os.environ["PATH"]}',
            'AMENT_PREFIX_PATH': f'{tmp_path}:{os.environ.get("AMENT_PREFIX_PATH", "")}',
            'WR_TEST_ROOT': str(tmp_path), 'WR_TEST_MODE': mode, 'WR_TEST_ROS2': real_ros2}
-    process = subprocess.Popen(['bash', 'deploy/record-rosbag.sh', '--output', str(output),
-        '--camera-only', '--warmup', '0', '--duration', '1' if mode == 'timed' else '0'],
+    command = ['bash', 'deploy/record-rosbag.sh', '--output', str(output),
+        '--camera-only', '--warmup', '0', '--duration', '1' if mode == 'timed' else '0']
+    if mode == 'calibration_interrupt':
+        command[-1] = '110'
+        command.extend(['--kind', 'calibration'])
+    process = subprocess.Popen(command,
         env=env, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        if mode == 'interrupt':
+        if mode in {'interrupt', 'calibration_interrupt'}:
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                if (output / 'acquisition-start-ns.txt').exists():
+                marker = 'calibration-phases.json' if mode == 'calibration_interrupt' else 'acquisition-start-ns.txt'
+                if (output / marker).exists():
                     break
                 if process.poll() is not None:
                     pytest.fail(str(process.communicate()))
@@ -97,6 +102,12 @@ elif args[:2] == ['bag', 'info']:
             assert (output / 'state').read_text().strip() == 'complete'
             assert 'bag/test.mcap' in (output / 'SHA256SUMS').read_text()
             assert '__pycache__' not in (output / 'SHA256SUMS').read_text()
+            if mode == 'calibration_interrupt':
+                import json
+                assert json.loads((output / 'session.json').read_text())['kind'] == 'calibration'
+                phases = json.loads((output / 'calibration-phases.json').read_text())
+                assert phases['phases'][0]['phase'] == 'still_start'
+                assert 'calibration-phases.json' in (output / 'SHA256SUMS').read_text()
             start = int((output / 'acquisition-start-ns.txt').read_text())
             end = int((output / 'acquisition-end-ns.txt').read_text())
             assert 0 < start < end
