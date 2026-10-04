@@ -51,11 +51,12 @@ cp "$bag_repo/deploy/record.launch.py" "$bag_output/record.launch.py"
 cp "$bag_repo/deploy/record-rosbag-checks.sh" "$bag_output/readiness-script.sh"
 cp "$bag_repo/deploy/seal-rosbag.sh" "$bag_output/seal-script.sh"
 printf '%s\n' starting > "$bag_output/state"
+trap 'printf "%s\n" failed > "$bag_output/state"' EXIT
 date -u --iso-8601=ns > "$bag_output/started-utc.txt"
 dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' 'ros-humble-depthai*' 'ros-humble-rosbag2*' 'ros-humble-mavros*' > "$bag_output/packages.txt" 2>/dev/null || true
-git -C "$bag_repo" rev-parse HEAD > "$bag_output/git-commit.txt"
-git -C "$bag_repo" diff --stat > "$bag_output/git-diff-stat.txt"
-trap 'printf "%s\n" failed > "$bag_output/state"' EXIT
+# Containers usually run as a different user than the checkout owner.
+git -c safe.directory="$bag_repo" -C "$bag_repo" rev-parse HEAD > "$bag_output/git-commit.txt"
+git -c safe.directory="$bag_repo" -C "$bag_repo" diff --stat > "$bag_output/git-diff-stat.txt"
 # Refuse duplicate owners. A failed graph query is also a failed preflight.
 timeout 15 ros2 node list --no-daemon > "$bag_output/nodes-before.txt"
 if grep -qx /oak "$bag_output/nodes-before.txt"; then echo "OAK driver is already running" >&2; exit 2; fi
