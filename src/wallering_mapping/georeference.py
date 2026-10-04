@@ -279,6 +279,9 @@ def georeference(project, model, image_accuracy, output, artifacts=(), max_resid
         "camera_prior_residual_rmse_m": float(np.sqrt(np.mean(errors**2))),
         "camera_prior_residual_max_m": float(errors.max()),
     }
+    if report.get("rig_calibration"):
+        # Camera priors already include the calibrated lever arm; record which calibration.
+        result["rig_calibration_sha256"] = report["rig_calibration"]["sha256"]
     write_json(output / "report.json", result)
     try:
         reconstruction.transform(engine.Sim3d(scale, engine.Rotation3d(rotation), translation))

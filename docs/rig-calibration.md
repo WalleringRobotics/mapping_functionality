@@ -81,6 +81,22 @@ driver's `/tf_static` publishes `oak_imu_frame` only as an identity under a sepa
 `oak_oak` parent, so no recorded data relates the IMU to the cameras. Only the
 camera-to-IMU solver can supply that link.
 
+## Using the calibration
+
+`wr-map sync --rig-calibration FILE` applies the camera-to-body spatial transform
+to produce diagnostic camera poses. `wr-map image-accuracy --rig-calibration FILE`
+uses its antenna-to-camera lever and covariance. Both reports retain link sources,
+unknown uncertainty and blocking reasons (see [MAVLink integration](mavlink-integration.md)
+and [RTK accuracy](rtk-accuracy.md)).
+
+The current `sync` consumer handles legacy SDK sessions only. A ROS IMU offset
+cannot be applied to SDK camera timestamps without validated clock-domain
+composition, including the camera exposure-to-IMU offset. Neither offset is
+applied here, and this explicitly blocks survey readiness. Unknown factory
+camera-to-camera covariance is preserved and also blocks RGB/right qualification.
+The accuracy profile must still supply measured exposure latency and vehicle
+attitude bounds; mounting sigma and gyro lag sigma do not substitute for them.
+
 ## IMU-to-IMU solver
 
 ```bash

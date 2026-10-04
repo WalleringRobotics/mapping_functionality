@@ -121,6 +121,7 @@ def test_real_colmap_binary_and_ascii_product_alignment_keeps_local_precision(tm
             "output_hashes": {"images.jsonl": sha256_file(accuracy / "images.jsonl")},
             "profile": {"policy": {"output_crs": "EPSG:32633"}},
             "vertical_datum": "WGS84 ellipsoidal height",
+            "rig_calibration": {"sha256": "f" * 64},
         },
     )
     cloud = workflow / "cloud.ply"
@@ -130,6 +131,7 @@ def test_real_colmap_binary_and_ascii_product_alignment_keeps_local_precision(tm
     output = tmp_path / "georeference"
     report = georeference(project, model, accuracy, output, [cloud], 0.01)
     assert report["status"] == "complete" and report["scale"] == pytest.approx(s)
+    assert report["rig_calibration_sha256"] == "f" * 64
     transformed = pycolmap().Reconstruction(str(output / "model"))
     origin = np.array(report["coordinate_origin_xyz_m"])
     for image in transformed.images.values():

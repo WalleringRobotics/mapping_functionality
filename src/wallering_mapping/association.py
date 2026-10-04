@@ -4,12 +4,20 @@ import bisect
 import csv
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 
 from .dataset import jsonl, sha256_file, write_json
+from .rig_calibration import (BODY, CAMERA_SOCKETS, LEFT, RigCalibration, check,
+                              factory_camera_links, rotation_from_xyzw, xyzw_from_rotation)
 from .telemetry_config import TelemetryConfig
 from .validate import distribution, validate
+
+STREAM_CAMERAS = {"rgb": CAMERA_SOCKETS[0], "left": LEFT, "right": CAMERA_SOCKETS[2]}
+CAMERA_CLOCK = ("oak_ros_stamp", "px4_ros_stamp")
+LEGACY_CLOCK_BLOCKER = ("ROS IMU offset has no validated mapping to legacy SDK camera timestamps; "
+                        "camera exposure-to-IMU offset is not applied")
 
 
 class ClockMap:
@@ -96,7 +104,58 @@ def nearest_record(rows, times, timestamp, max_age_ns):
             "age_ms": age / 1e6, "fields": nearest["fields"]} if age <= max_age_ns else None
 
 
-def associate(root, output, stream="rgb", min_fraction=.9):
+def rig_context(path, root, stream):
+    """Rig calibration resolved for one recorded stream, with survey-readiness gating."""
+    path = Path(path).resolve()
+    calibration = RigCalibration.read(path)
+    device = json.loads((root / "manifest.json").read_text()).get("device", {}).get("id")
+    if None not in (device, calibration.oak_device_id) and device != calibration.oak_device_id:
+        raise ValueError(f"Calibration is for OAK {calibration.oak_device_id}, session used {device}")
+    camera = STREAM_CAMERAS[stream]
+    factory = None
+    if camera != LEFT:
+        oak = json.loads((root / "calibration.json").read_text())
+        if oak.get("cameraData"):
+            factory = factory_camera_links(oak)
+    body_camera = calibration.camera_to_body(camera, factory)
+    gate = check(calibration)
+    links = {f"{a}->{b}": "unset" for a, b in calibration.unset}
+    links.update({f"{a}->{b}": t.sources[0] for (a, b), t in calibration.transforms.items()})
+    links.update({f"{a}->{b}": o["source"] for (a, b), o in calibration.offsets.items()})
+    offset = calibration.offsets.get(CAMERA_CLOCK)
+    blocking = list(gate["blocking"])
+    # This consumer only accepts SDK sessions. A ROS gyro lag is not a calibration
+    # of the SDK exposure timestamp or its relationship to the OAK IMU timeline.
+    blocking.append(LEGACY_CLOCK_BLOCKER)
+    if body_camera is not None and body_camera.covariance is None:
+        blocking.append(f"{BODY}->{camera} uncertainty")
+    needed = [] if body_camera is not None else [f"{BODY}->{camera}"]
+    needed += [] if offset is not None else ["time offset {}->{}".format(*CAMERA_CLOCK)]
+    report = {"path": str(path), "sha256": sha256_file(path), "camera_frame": camera,
+              "body_to_camera": None if body_camera is None else body_camera.report(),
+              "camera_path": gate["camera_path"], "time_offset": offset, "links": links,
+              "by_source": {source: sorted(k for k, v in links.items() if v == source)
+                            for source in sorted(set(links.values()))},
+              "unknown_uncertainty": gate["unknown_uncertainty"],
+              "missing_for_camera_pose": needed,
+              "factory_extrinsics": None if factory is None else "OAK factory camera-to-camera uncertainty unknown",
+              "time_offset_applied": False,
+              "clock_limitation": LEGACY_CLOCK_BLOCKER,
+              "survey_ready": not blocking, "blocking": list(dict.fromkeys(blocking))}
+    return {"calibration": calibration, "factory": factory, "camera": camera,
+            "body_to_camera": body_camera, "offset": offset, "report": report}
+
+
+def camera_pose(body, body_to_camera):
+    """Camera pose in local ENU: body pose (ENU <- body FLU) composed with base_link -> camera."""
+    rotation = rotation_from_xyzw(body["orientation_body_flu_to_enu_xyzw"])
+    position = np.asarray(body["position_enu_m"], float) + rotation @ body_to_camera.translation
+    return {"position_enu_m": position.tolist(),
+            "orientation_camera_to_enu_xyzw": xyzw_from_rotation(rotation @ body_to_camera.rotation),
+            "camera_frame": body_to_camera.child}
+
+
+def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None):
     root, output = root.resolve(), output.resolve()
     if output.is_relative_to(root) or root.is_relative_to(output):
         raise ValueError("Write association results outside the immutable source session")
@@ -115,6 +174,8 @@ def associate(root, output, stream="rgb", min_fraction=.9):
     values = dict(manifest["telemetry"]["config"])
     values["required"] = tuple(values["required"])
     config = TelemetryConfig(**values)
+    rig = rig_context(rig_calibration, root, stream) if rig_calibration else None
+    body_camera = rig["body_to_camera"] if rig else None
     sdk = ClockMap([s for s in jsonl(root / "clock.jsonl") if s.get("target") == "depthai_steady"])
     ros = ClockMap([s for s in jsonl(root / "telemetry.jsonl") if s["record_type"] == "clock"])
     inverse_ros = ClockMap([{**s, "target_ns": s["reference_ns"], "reference_ns": s["target_ns"]}
@@ -152,6 +213,18 @@ def associate(root, output, stream="rgb", min_fraction=.9):
                "accuracy_claim": "Estimated temporal association only; no metric accuracy claim",
                "camera_extrinsics": "Not supplied; do not treat body/GNSS position as camera center",
                "altitude": manifest["telemetry"]["altitude"]}
+    if rig:
+        needed = rig["report"]["missing_for_camera_pose"]
+        if body_camera is not None:
+            summary["coordinate_frame"] = (f"Vehicle pose in local ENU, body FLU; camera pose = body pose "
+                                           f"composed with {BODY}->{rig['camera']}")
+        summary["camera_extrinsics"] = (
+            f"Rig calibration {rig['report']['sha256']} spatial transform applied: {BODY}->{rig['camera']}; "
+            "diagnostic pose only, exposure timing remains uncalibrated"
+            if not needed else
+            f"Not supplied: rig calibration leaves {', '.join(needed)} unset; "
+            "do not treat body/GNSS position as camera center")
+        summary["rig_calibration"] = rig["report"]
     write_json(output / "report.json", summary)
     matched, rejected, budgets = [], [], []
     try:
@@ -163,6 +236,7 @@ def associate(root, output, stream="rgb", min_fraction=.9):
                           "device_exposure_ns": frame["device_ns"], "sdk_exposure_ns": frame["host_synced_ns"]}
                 try:
                     mono, sdk_bracket, method = sdk.to_monotonic(frame["host_synced_ns"], max_clock_age)
+                    sdk_mono = mono
                     index = bisect.bisect_right(sync_times, mono) - 1
                     if index < 0 or mono - sync_times[index] > config.max_sync_age_ms * 1e6:
                         raise ValueError("Missing/stale MAVROS TIMESYNC evidence")
@@ -195,6 +269,11 @@ def associate(root, output, stream="rgb", min_fraction=.9):
                                   estimated_alignment_budget_ms=budget / 1e6,
                                   body_pose=pose, imu=imu, gnss=gnss,
                                   gnss_reference="MAVROS vehicle/global fix; no camera lever arm applied")
+                    if rig:
+                        record.update(sdk_exposure_monotonic_ns=sdk_mono,
+                                      rig_time_offset_ns=None,
+                                      rig_time_offset_sigma_ns=None,
+                                      camera_pose=None if body_camera is None else camera_pose(pose, body_camera))
                     matched.append(record)
                     budgets.append(budget / 1e6)
                 except ValueError as error:
@@ -211,13 +290,24 @@ def associate(root, output, stream="rgb", min_fraction=.9):
                 writer.writerow([row["image"], row["exposure_monotonic_ns"], row["exposure_ros_ns"],
                                  row["estimated_px4_boot_ns"], *pose["position_enu_m"],
                                  *pose["orientation_body_flu_to_enu_xyzw"], row["estimated_alignment_budget_ms"]])
+        outputs = ["associations.jsonl", "body-poses.csv"]
+        if body_camera is not None:
+            outputs.append("camera-poses.csv")
+            with (output / "camera-poses.csv").open("x", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerow(["image", "exposure_monotonic_ns", "camera_x_enu_m", "camera_y_enu_m",
+                                 "camera_z_enu_m", "q_x", "q_y", "q_z", "q_w", "estimated_alignment_budget_ms"])
+                for row in matched:
+                    pose = row["camera_pose"]
+                    writer.writerow([row["image"], row["exposure_monotonic_ns"], *pose["position_enu_m"],
+                                     *pose["orientation_camera_to_enu_xyzw"], row["estimated_alignment_budget_ms"]])
         total = len(matched) + len(rejected)
         fraction = len(matched) / total if total else 0
         summary.update(status="complete", passed=bool(matched) and fraction >= min_fraction,
                        associated=len(matched), unassociated=len(rejected), associated_fraction=fraction,
                        alignment_budget_ms=distribution(budgets),
                        gnss_associated=sum(r["gnss"] is not None for r in matched),
-                       output_hashes={name: sha256_file(output / name) for name in ("associations.jsonl", "body-poses.csv")})
+                       output_hashes={name: sha256_file(output / name) for name in outputs})
     except BaseException as error:
         summary.update(status="failed", error=str(error))
         raise

@@ -176,6 +176,21 @@ foundation PR. These body positions are not automatically passed to ODM as camer
 centres: camera mounting, lever arm and coordinate transform must first be measured.
 GNSS covariance, fix status and height reference remain available for that work.
 
+With `--rig-calibration FILE` (the [rig calibration](rig-calibration.md) for this
+OAK), `sync` composes the camera-to-body transform and writes diagnostic
+`camera_pose` records and `camera-poses.csv`. This command currently supports only
+legacy SDK sessions. It does **not** apply the ROS IMU offset to SDK exposure
+stamps: no validated mapping establishes equivalence of those clock domains, and
+the camera exposure-to-IMU offset is not composed. Both omissions explicitly block
+`survey_ready`, including when all file links have numeric values. The original
+SDK association time and budget stay unchanged; rig offset fields are null.
+
+RGB/right use recorded factory extrinsics for spatial geometry, with unknown
+covariance preserved. Their uncertainty blocks qualification until measured.
+Reports retain calibration SHA256, link sources, supplied offsets and blocking
+reasons. Spatial composition alone does not calibrate exposure timing. Without
+the option the outputs are unchanged.
+
 For unattended capture, customize the foundation service to source the same ROS
 and platform overlay and pass `--telemetry-config`. The launcher accepts these through
 `WR_MAPPING_ROS_SETUP`, `WR_MAPPING_ROS_OVERLAY`, and `WR_MAPPING_TELEMETRY_CONFIG`
