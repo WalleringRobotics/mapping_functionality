@@ -48,6 +48,11 @@ def parser():
     hardware.add_argument("--telemetry-seconds", type=positive, default=75)
     hardware.add_argument("--min-memory-gib", type=positive, default=1)
     hardware.add_argument("--report", type=Path)
+    serial_check = commands.add_parser("serial-check", help="Passively listen for MAVLink at selected baud rates")
+    serial_check.add_argument("--device", type=Path, default=Path("/dev/ttyUSB0"))
+    serial_check.add_argument("--baud", type=int, nargs="+", default=[115200], help="One or more baud rates, checked sequentially")
+    serial_check.add_argument("--seconds", type=positive, default=20, help="Listen seconds per baud, at most 300")
+    serial_check.add_argument("--report", type=Path)
     status = commands.add_parser("status", help="Read the recorder's current status")
     status.add_argument("session", type=Path)
     simulate = commands.add_parser("simulate", help="Create an IO fixture without hardware")
@@ -146,6 +151,20 @@ def main(argv=None):
             encoded = json.dumps(result, indent=2) + "\n"
             if args.report:
                 # Never replace an earlier acceptance report or a deployment config.
+                with args.report.open("x") as report:
+                    report.write(encoded)
+            print(encoded, end="")
+            return 0 if result["ready"] else 2
+        elif args.command == "serial-check":
+            from .serial_diagnostics import check_serial
+            if args.report:
+                if args.report.exists():
+                    raise FileExistsError(f"Report already exists: {args.report}")
+                if not args.report.parent.is_dir():
+                    raise FileNotFoundError(f"Report directory does not exist: {args.report.parent}")
+            result = check_serial(args.device, args.baud, args.seconds)
+            encoded = json.dumps(result, indent=2) + "\n"
+            if args.report:
                 with args.report.open("x") as report:
                     report.write(encoded)
             print(encoded, end="")

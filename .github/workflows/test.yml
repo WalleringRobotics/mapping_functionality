@@ -13,8 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -e '.[dev,processing,terrain]'
-      - run: ruff check src tests
+      - run: python -m pip install -e '.[dev,processing,terrain,diagnostics]'
+      - run: ruff check src tests deploy/check-mavros-gnss.py
       - run: pytest -q
       - name: Exercise installed CLI without camera
         run: |
