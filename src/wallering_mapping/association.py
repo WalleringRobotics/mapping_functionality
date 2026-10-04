@@ -169,8 +169,10 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
     config = TelemetryConfig(**values)
     rig = rig_context(rig_calibration, root, stream) if rig_calibration else None
     body_camera = rig["body_to_camera"] if rig else None
-    offset = (rig and rig["offset"]) or {"offset_ns": 0, "sigma_ns": 0}
-    offset_sigma_ns = offset["sigma_ns"] or 0
+    # Unset or unknown values shift/widen nothing internally but are serialized as null, not exact zero.
+    offset = rig["offset"] if rig else None
+    offset_ns = offset["offset_ns"] if offset else 0
+    offset_sigma_ns = (offset["sigma_ns"] if offset else None) or 0
     sdk = ClockMap([s for s in jsonl(root / "clock.jsonl") if s.get("target") == "depthai_steady"])
     ros = ClockMap([s for s in jsonl(root / "telemetry.jsonl") if s["record_type"] == "clock"])
     inverse_ros = ClockMap([{**s, "target_ns": s["reference_ns"], "reference_ns": s["target_ns"]}
@@ -232,7 +234,7 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
                     mono, sdk_bracket, method = sdk.to_monotonic(frame["host_synced_ns"], max_clock_age)
                     sdk_mono = mono
                     # The calibrated OAK->PX4 offset puts the exposure on the PX4 pose timeline.
-                    mono += offset["offset_ns"]
+                    mono += offset_ns
                     index = bisect.bisect_right(sync_times, mono) - 1
                     if index < 0 or mono - sync_times[index] > config.max_sync_age_ms * 1e6:
                         raise ValueError("Missing/stale MAVROS TIMESYNC evidence")
@@ -268,8 +270,8 @@ def associate(root, output, stream="rgb", min_fraction=.9, rig_calibration=None)
                                   gnss_reference="MAVROS vehicle/global fix; no camera lever arm applied")
                     if rig:
                         record.update(sdk_exposure_monotonic_ns=sdk_mono,
-                                      rig_time_offset_ns=offset["offset_ns"],
-                                      rig_time_offset_sigma_ns=offset["sigma_ns"],
+                                      rig_time_offset_ns=offset["offset_ns"] if offset else None,
+                                      rig_time_offset_sigma_ns=offset["sigma_ns"] if offset else None,
                                       camera_pose=None if body_camera is None else camera_pose(pose, body_camera))
                     matched.append(record)
                     budgets.append(budget / 1e6)

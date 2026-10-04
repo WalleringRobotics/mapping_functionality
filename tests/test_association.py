@@ -192,6 +192,14 @@ def test_missing_links_block_survey_readiness_with_precise_reasons(tmp_path):
     assert result["camera_extrinsics"].startswith(f"Not supplied: rig calibration leaves {BODY}->{RGB} unset")
     assert "camera-poses.csv" not in result["output_hashes"]
     assert all(row["camera_pose"] is None for row in jsonl(tmp_path / "rig/associations.jsonl"))
+    # An unset OAK->PX4 offset is applied as no shift but serialized as unknown, not exact zero.
+    unset_offset = rig_file(tmp_path / "unset-offset.json", unset=[("oak_ros_stamp", "px4_ros_stamp")])
+    result = associate(root, tmp_path / "unset-offset", rig_calibration=unset_offset)
+    assert result["rig_calibration"]["time_offset"] is None
+    assert "time offset oak_ros_stamp->px4_ros_stamp" in result["camera_extrinsics"]
+    for row in jsonl(tmp_path / "unset-offset/associations.jsonl"):
+        assert row["rig_time_offset_ns"] is None and row["rig_time_offset_sigma_ns"] is None
+        assert row["exposure_monotonic_ns"] == row["sdk_exposure_monotonic_ns"]
     # Camera link set but the OAK->PX4 offset sigma unknown: pose is composed, survey stays blocked.
     data = json.loads(rig_file(tmp_path / "partial.json").read_text())
     data["time_offsets"][0]["sigma_ns"] = None
