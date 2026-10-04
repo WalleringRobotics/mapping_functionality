@@ -282,24 +282,33 @@ def main(argv=None):
             print(json.dumps(result, indent=2))
             return 2 if args.require_complete and not result["complete"] else 0
         elif args.command == "calibrate-solve":
+            import shutil
+            import tempfile
             from .calibration_imu import calibration_entries, solve_session
-            from .dataset import sha256_file, write_json
+            from .dataset import write_json
             from .rig_calibration import RigCalibration, apply_entries, check
             if args.output.exists():
                 raise ValueError("Output must be a new directory")
             if args.output.resolve().is_relative_to(args.session.resolve()):
                 raise ValueError("Write calibration results outside the immutable source session")
             calibration = RigCalibration.read(args.calibration)
+            check(calibration, args.session)  # device identity and factory data, before any work
             solved = solve_session(args.session, max_offset_ms=args.max_offset_ms)
-            evidence = f"session {args.session.resolve().name}, bag metadata sha256 " + sha256_file(
-                args.session / "bag/metadata.yaml")
+            evidence = f"session {args.session.resolve().name}, SHA256SUMS {solved['seal_sha256']}"
             updated = apply_entries(calibration.data, calibration_entries(solved, calibration, evidence))
-            args.output.mkdir(parents=True)
-            write_json(args.output / "rig-calibration.json", updated)
             solved["rotation"] = solved["rotation"].tolist()
             result = {"imu_to_imu": solved, "calibration": check(RigCalibration(updated), args.session),
                       "outputs": {"calibration": str(args.output / "rig-calibration.json")}}
-            write_json(args.output / "report.json", result)
+            # Publish the directory only once both files are complete.
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix=".calibrate-", dir=args.output.parent))
+            try:
+                write_json(staging / "rig-calibration.json", updated)
+                write_json(staging / "report.json", result)
+                staging.rename(args.output)
+            except BaseException:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,

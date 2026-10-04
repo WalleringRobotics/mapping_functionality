@@ -37,7 +37,7 @@ def oak_stamps(seconds, rng):
 
 
 def synthetic(seconds=90, offset_ns=12_300_000, rotation=None, px4_hz=50, axes=(0, 1, 2),
-              noise=0.01, seed=1, reflect=False, drop=None):
+              noise=0.01, seed=1, reflect=False, drop=None, step=None):
     rng = np.random.default_rng(seed)
     rotation = rotation_from_rpy_deg([10, -170, 95]) if rotation is None else rotation
     rate = body_rates(seconds, axes, seed)
@@ -47,6 +47,9 @@ def synthetic(seconds=90, offset_ns=12_300_000, rotation=None, px4_hz=50, axes=(
         oak_rates[:, 1] *= -1
     # OAK stamps run offset_ns behind the PX4 clock: px4 = oak + offset.
     oak_t = T0 + true_oak.astype(np.int64) - offset_ns
+    if step is not None:
+        # The OAK clock jumps by step[1] ns from step[0] seconds on.
+        oak_t = oak_t - np.where(true_oak >= step[0] * 1e9, step[1], 0).astype(np.int64)
     px4_true = np.arange(0, seconds * 1e9, 1e9 / px4_hz) + rng.normal(0, 0.3e6, int(seconds * px4_hz))
     px4_true = np.sort(px4_true[px4_true > 0])
     px4_rates = rate(px4_true / 1e9) + rng.normal(0, noise, (len(px4_true), 3))
@@ -70,7 +73,7 @@ def test_recovers_offset_and_rotation(offset_ns, px4_hz):
     assert rotation_error(result["rotation"], rotation) < 0.2
     # Reported uncertainty must cover the actual error.
     assert abs(error_ns) <= 4 * result["offset_sigma_ns"]
-    assert result["holdout"]["consistent_3_sigma"] is True
+    assert result["holdout"]["consistent"] is True
     assert result["skipped_for_oak_gaps"] == 0
 
 
@@ -98,6 +101,12 @@ def test_refuses_static_session():
 def test_detects_axis_handedness_error():
     oak, px4, _ = synthetic(reflect=True)
     with pytest.raises(ValueError, match="reflection"):
+        solve_gyros(oak, px4)
+
+
+def test_timing_change_in_held_out_quarter_is_refused():
+    oak, px4, _ = synthetic(step=(75, 2_000_000))
+    with pytest.raises(ValueError, match="Held-out final quarter disagrees"):
         solve_gyros(oak, px4)
 
 
@@ -161,27 +170,71 @@ def write_bag(path, oak, px4):
                 writer.write(connection, t, store.serialize_cdr(message, Imu.__msgtype__))
 
 
-def test_cli_solves_a_recorded_session(tmp_path, capsys):
-    oak, px4, rotation = synthetic(seconds=60)
-    session = tmp_path / "session"
-    session.mkdir()
-    write_bag(session, oak, px4)
+def recorded_session(root, oak, px4, device="TESTDEVICE"):
+    from wallering_mapping.dataset import sha256_file
+    root.mkdir()
+    write_bag(root, oak, px4)
     # Every real session carries the OAK factory calibration; a single camera suffices here.
-    (session / "TESTDEVICE_calibration.json").write_text(json.dumps(
+    (root / f"{device}_calibration.json").write_text(json.dumps(
         {"boardName": "TEST", "imuExtrinsics": {"toCameraSocket": -1},
          "cameraData": [[1, {"extrinsics": {"toCameraSocket": -1}}]]}))
+    for name in ("oak-requested.yaml", "oak-parameters.yaml", "mcap.yaml"):
+        (root / name).write_text("fixture\n")
+    (root / "topics.txt").write_text("/oak/imu/data\n/mavros/imu/data_raw\n")
+    (root / "SHA256SUMS").write_text("".join(
+        f"{sha256_file(p)}  ./{p.relative_to(root)}\n" for p in sorted(root.rglob("*")) if p.is_file()))
+    (root / "state").write_text("complete\n")
+    return root
+
+
+def solve_cli(session, calibration, output):
+    return cli.main(["calibrate-solve", str(session), "--calibration", str(calibration),
+                     "--output", str(output)])
+
+
+def test_cli_solves_a_recorded_session(tmp_path, capsys):
+    oak, px4, rotation = synthetic(seconds=60)
+    session = recorded_session(tmp_path / "session", oak, px4)
     calibration = tmp_path / "rig.json"
     calibration.write_text(json.dumps(hand_measured()))
     output = tmp_path / "solved"
-    assert cli.main(["calibrate-solve", str(session), "--calibration", str(calibration),
-                     "--output", str(output)]) == 0
+    assert solve_cli(session, calibration, output) == 0
     report = json.loads((output / "report.json").read_text())
     assert abs(report["imu_to_imu"]["offset_ns"] - 12_300_000) < 500_000
     assert report["imu_to_imu"]["rates_hz"]["px4"] == pytest.approx(50, rel=0.02)
     solved = RigCalibration.read(output / "rig-calibration.json")
     assert rotation_error(solved.transforms[(BODY, OAK_IMU)].rotation, rotation) < 0.2
+    assert report["imu_to_imu"]["seal_sha256"] in json.dumps(json.loads((output / "rig-calibration.json").read_text()))
     assert json.loads(calibration.read_text()) == hand_measured()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["rig.json", "session", "solved"]
     capsys.readouterr()
-    assert cli.main(["calibrate-solve", str(session), "--calibration", str(calibration),
-                     "--output", str(output)]) == 2
+    assert solve_cli(session, calibration, output) == 2
     assert "new directory" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("damage, message", [
+    (lambda root: (root / "SHA256SUMS").unlink(), "no SHA256SUMS seal"),
+    (lambda root: (root / "topics.txt").write_text("tampered\n"), "checksum mismatch"),
+    (lambda root: (root / "state").write_text("recording\n"), "did not finish cleanly"),
+])
+def test_cli_refuses_unsealed_or_altered_sessions(tmp_path, capsys, damage, message):
+    oak, px4, _ = synthetic(seconds=60)
+    session = recorded_session(tmp_path / "session", oak, px4)
+    damage(session)
+    calibration = tmp_path / "rig.json"
+    calibration.write_text(json.dumps(hand_measured()))
+    assert solve_cli(session, calibration, tmp_path / "solved") == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "solved").exists()
+
+
+def test_cli_refuses_another_device_before_writing(tmp_path, capsys):
+    oak, px4, _ = synthetic(seconds=60)
+    session = recorded_session(tmp_path / "session", oak, px4, device="OTHERDEVICE")
+    data = hand_measured()
+    data["hardware"]["oak_device_id"] = "TESTDEVICE"
+    calibration = tmp_path / "rig.json"
+    calibration.write_text(json.dumps(data))
+    assert solve_cli(session, calibration, tmp_path / "solved") == 2
+    assert "Calibration is for OAK TESTDEVICE" in capsys.readouterr().err
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["rig.json", "session"]

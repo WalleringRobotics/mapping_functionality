@@ -169,12 +169,24 @@ def solve_gyros(oak, px4, *, max_offset_ms=200.0, segments=4, holdout_fraction=0
     offset_sigma = max(offsets.std(ddof=1) / math.sqrt(count), offset_floor_ns)
     rotation_sigma = np.maximum(vectors.std(axis=0, ddof=1) / math.sqrt(count), rotation_floor_rad)
 
+    # Validate against a reference that never saw the held-out quarter; the accepted
+    # result is the full-data fit.
+    training = solve_window(aligner, max_offset_ns, (start, split))
     holdout = solve_window(aligner, max_offset_ns, (split, end + 1))
-    holdout_offset_error = holdout["offset_ns"] - full["offset_ns"]
-    holdout_rotation_error = float(np.linalg.norm(rotation_vector(holdout["rotation"] @ full["rotation"].T)))
-    consistent = (abs(holdout_offset_error) <= 3 * max(offsets.std(ddof=1), offset_floor_ns)
-                  and holdout_rotation_error <= 3 * max(float(np.linalg.norm(vectors.std(axis=0, ddof=1))),
-                                                         rotation_floor_rad))
+    holdout_offset_error = holdout["offset_ns"] - training["offset_ns"]
+    holdout_rotation_error = float(np.linalg.norm(rotation_vector(holdout["rotation"] @ training["rotation"].T)))
+    # The difference of two independent estimates carries both errors: the holdout
+    # behaves like one segment, the training fit like their mean. k=4 because a scatter
+    # from a few segments is itself uncertain (no false rejects in 40 synthetic
+    # sessions; a 2 ms step in the final quarter scored >= 4.8).
+    spread = 4 * math.sqrt(1 + 1 / count)
+    offset_limit = spread * max(offsets.std(ddof=1), offset_floor_ns)
+    rotation_limit = spread * max(float(np.linalg.norm(vectors.std(axis=0, ddof=1))), rotation_floor_rad)
+    if abs(holdout_offset_error) > offset_limit or holdout_rotation_error > rotation_limit:
+        raise ValueError(
+            f"Held-out final quarter disagrees with the earlier data (offset {holdout_offset_error / 1e6:+.2f} ms, "
+            f"limit {offset_limit / 1e6:.2f} ms; rotation {holdout_rotation_error:.4f} rad, limit "
+            f"{rotation_limit:.4f} rad): timing or mounting changed during the session")
     return {"offset_ns": full["offset_ns"], "offset_sigma_ns": round(offset_sigma),
             "rotation": full["rotation"], "rotation_sigma_rad": rotation_sigma.tolist(),
             "residual_rad_s": full["residual_rad_s"],
@@ -186,7 +198,8 @@ def solve_gyros(oak, px4, *, max_offset_ms=200.0, segments=4, holdout_fraction=0
                          for e, v in zip(estimates, vectors)],
             "holdout": {"offset_error_ns": holdout_offset_error,
                         "rotation_error_rad": holdout_rotation_error,
-                        "residual_rad_s": holdout["residual_rad_s"], "consistent_3_sigma": consistent}}
+                        "offset_limit_ns": round(offset_limit), "rotation_limit_rad": rotation_limit,
+                        "residual_rad_s": holdout["residual_rad_s"], "consistent": True}}
 
 
 def calibration_entries(result, calibration=None, evidence=""):
@@ -217,8 +230,16 @@ def calibration_entries(result, calibration=None, evidence=""):
 
 
 def solve_session(session, **options):
+    from .bags import check_seal
+    from .dataset import sha256_file
+    session = Path(session)
+    if not (session / "state").is_file() or (session / "state").read_text().strip() != "complete":
+        raise ValueError("Session did not finish cleanly (state is not complete)")
+    # Every byte read below must be covered by the recording's own checksums.
+    check_seal(session)
     oak, px4 = read_gyros(session)
     result = solve_gyros(oak, px4, **options)
+    result["seal_sha256"] = sha256_file(session / "SHA256SUMS")
     result["rates_hz"] = {name: float((len(t) - 1) / ((t[-1] - t[0]) / 1e9))
                           for name, (t, _) in (("oak", oak), ("px4", px4))}
     return result

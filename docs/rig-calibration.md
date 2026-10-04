@@ -97,7 +97,12 @@ writes a *new* calibration (`base_link -> oak_imu_frame` and the `oak_ros_stamp 
 px4_ros_stamp` offset, both `estimated`) and a report; the input file is not modified.
 
 - **Uncertainty:** standard error across four independent segments (floors 0.1 ms,
-  0.002 rad); a held-out final quarter must agree within 3 sigma (`holdout.consistent_3_sigma`).
+  0.002 rad). The final quarter is held out: a fit of the earlier three quarters must
+  agree with it within 4·σ_segment·√(1 + 1/n), or the solve is refused and nothing is
+  written. The accepted result is the full-data fit.
+- **Integrity:** the session must be `complete` and its `SHA256SUMS` seal must verify
+  before any data is read; the seal's hash is recorded as evidence. Device identity is
+  checked before solving, and the output directory appears only once complete.
 - **Refusals:** a principal rotation axis below 0.3 rad/s RMS (rotate about every axis),
   fewer than two well-excited segments, an offset at the search limit, or a reflection
   fitting far better than a rotation (an IMU axis/handedness convention error).
