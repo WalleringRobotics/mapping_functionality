@@ -1,0 +1,15 @@
+# ros2 bag record --qos-profile-overrides-path: deep subscriber queues for
+# high-rate, small messages (#18). The default depth 10 overflows while the
+# recorder's single executor thread handles a large RGB frame. Each entry must
+# match the publisher's reliability/durability (see bag/metadata.yaml
+# offered_qos_profiles). Images keep rosbag2's adaptive default QoS.
+/oak/imu/data: {history: keep_last, depth: 2000, reliability: reliable, durability: volatile}
+/mavros/imu/data_raw: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+/mavros/imu/data: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+/mavros/local_position/pose: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+/mavros/global_position/global: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+/mavros/global_position/raw/fix: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+/mavros/timesync_status: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+/mavros/time_reference: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+/uas1/mavlink_source: {history: keep_last, depth: 5000, reliability: best_effort, durability: volatile}
+/mavros/mission/reached: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Recording transport mitigation for #18. A 64 MiB shared-memory segment
+     accommodates a 37 MB RGB frame; deep recorder QoS is configured separately.
+     This is a mitigation to qualify with loaded captures, not a guarantee that
+     upstream sensors or BEST_EFFORT publishers cannot lose samples. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>shm_large_segment</transport_id>
+      <type>SHM</type>
+      <segment_size>67108864</segment_size>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>udpv4</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="wallering_recording" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>shm_large_segment</transport_id>
+        <transport_id>udpv4</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

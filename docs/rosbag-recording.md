@@ -154,3 +154,74 @@ reproducing diagnostics. JSON capture profiles, `doctor --mode capture` and
 the ROS stack. Use a bounded ROS capture followed by `validate` for its startup
 and throughput check. Existing SDK-format datasets and offline workflows remain
 readable. Historical hardware reports retain their original tool/version context.
+
+
+## Guided calibration and the 20 fps candidate
+
+`wr-map calibrate-record --output runs/calibration-001` records a fixed 110-second
+motion sequence after readiness and 60 seconds of warmup. It uses
+`configs/oakd-ros-calibration.yaml`: lossless mono 800P at 20 Hz, RGB 1080P at
+2 Hz, and native OAK gyro 100 Hz / accelerometer 125 Hz with acceleration
+interpolated onto gyro times. The ordinary default remains the historical
+12 MP / 2 Hz profile until the 20-minute qualification below passes.
+
+The mode requests both PX4 IMU streams at 100 Hz using an **existing MAVROS
+owner**; start MAVROS separately. `--px4-imu-rate 0` preserves existing streams,
+and `--camera-only` skips PX4 entirely for camera diagnostics. These options do
+not satisfy combined sensor calibration acceptance. The per-session request and
+reset logs are described in [MAVLink integration](mavlink-integration.md#temporary-px4-imu-rate-requests).
+
+Remove propellers, support the rigidly mounted OAK/PX4 assembly, provide cable
+strain relief, and keep cameras facing a textured scene at least 2 m away.
+Follow the terminal prompts: still 10 s, then three 20 s cycles, each containing
+roll (6 s), pitch (7 s) and yaw (7 s). Make about three smooth sweeps through
+±30° within each axis interval, roughly one full swing every 2 s and nine total
+sweeps per axis. Keep amplitude and pace comfortable while supporting the rig;
+finish with free multi-axis motion (30 s) and still 10 s. This deliberate pace
+and cycle ordering keep independent solver windows observable; slower or weaker
+recordings may honestly fail excitation gates. `session.json` marks `kind: calibration` and
+`calibration-phases.json` records the actual host realtime of each prompt. These
+are operator hints, not measured rotations or solver ground truth. Normal seal
+and audit rules apply; an interrupted calibration can preserve a clean bag but
+fails the full-phase calibration audit. All present provenance files, including
+factory calibration, phase logs and rate logs, must appear in `SHA256SUMS`.
+
+`configs/oakd-ros-20fps-candidate.yaml` uses the same cameras with OAK gyro 200 Hz
+and accelerometer 250 Hz. The deliberate RGB choice is **lossless 1080P at 2 Hz**:
+2×1280×800 mono at 20 Hz plus 1920×1080×3 RGB at 2 Hz is about 53.4 MB/s,
+2.99 GiB/min and 179 GiB/hour before MCAP/telemetry overhead. Keep at least
+65 GiB free for a 20-minute soak plus reserve and pre/post-roll; the measured
+budget, not this pixel calculation, determines actual available run length.
+Lossy RGB has not been adopted. Compared with 12 MP RGB, 1080P sacrifices
+spatial detail; the actual CameraInfo intrinsics determine GSD = height/focal
+length in pixels. Along-track overlap depends on footprint, speed and frame
+interval (overlap ≈ 1 − speed/(fps × footprint length)). At survey speed the
+2 Hz RGB stream may have less overlap than the 20 Hz mono pair. Choose altitude,
+speed and output stream against the required GSD before qualifying a survey.
+Offline `bag-import` retains each stream's independent requested rate in the
+derived manifest; derived validation uses that rate for gap warnings.
+
+Recorder subscriptions now use the copied `rosbag-qos.yaml` with deep small-message
+queues, and participants launched by the recorder use the copied
+`fastdds-profile.xml` with a 64 MiB shared-memory segment. These mitigate queue
+pressure from large frames; BEST_EFFORT and upstream losses remain possible.
+Every image/IMU audit now reports `in_window`: observed samples, nominal expected
+count, count deficit, inferred missing periods in gaps, measured rate and repeated
+gyro values. Count deficits are estimates affected by boundary phase and sensor
+clock drift; repeated stationary gyro values are not proof of loss. Hardware
+sequence loss remains unknown. Empty windows report a full requested count
+deficit; duplicate/backward IMU stamps fail validation. PX4 IMU below 95% of an
+explicitly requested rate fails validation.
+
+For qualification, record both the historical default and candidate for at least
+1200 seconds after warmup. Each session saves `resources.jsonl` every 5 seconds
+with host CPU/RAM, optional built-in Jetson temperature readings, free space and
+observed bag size. Unreadable CPU/GPU temperature values are omitted and remain
+missing thermal acceptance evidence; no extra sensor is required. Archive `tegrastats`
+for additional Jetson clock/throttle evidence during each run and use
+`wr-map validate SESSION --report runs/NEW-audit.json`. Inspect each in-window
+camera and IMU rate (within 1%), no interior gaps, USB SUPER in the driver log,
+mean/peak bag write load, RAM/CPU and maximum temperature/thermal margin. Check
+PX4 pose rate, MAVLink loss and TIMESYNC RTT/residual against a baseline. A clean
+seal or an audit with IMU gap warnings is not a passing soak. Physical motion
+acceptance requires an operator; automated stationary capture cannot verify it.

@@ -282,3 +282,40 @@ def test_gyro_reader_checks_every_frame(monkeypatch):
     monkeypatch.setattr(bags, "reader", reader)
     with pytest.raises(ValueError, match="wrong"):
         ci.read_gyros("unused")
+
+
+def test_guided_110_second_repeated_axis_schedule_is_observable():
+    """Three roll6/pitch7/yaw7 cycles, free30 and still10 at both ends.
+
+    Each axis uses three smooth +/-30-degree sweeps in its allotted interval;
+    matching recorded rates, rather than phase labels, must excite the solver.
+    """
+    def guided_rates(t):
+        t = np.asarray(t)
+        rates = np.zeros((len(t), 3))
+        start = 10.
+        for _ in range(3):
+            for axis, duration in enumerate((6., 7., 7.)):
+                inside = (t >= start) & (t < start + duration)
+                frequency = 3 / duration
+                rates[inside, axis] = np.deg2rad(30) * 2 * np.pi * frequency * np.sin(
+                    2 * np.pi * frequency * (t[inside] - start))
+                start += duration
+        free = (t >= 70) & (t < 100)
+        rates[free] = np.column_stack([1.4 * np.sin(2 * np.pi * f * t[free])
+                                      for f in (.31, .43, .57)])
+        envelope = np.clip(np.minimum(t[free] - 70, 100 - t[free]) / 2, 0, 1)
+        rates[free] *= envelope[:, None]
+        return rates
+    rng = np.random.default_rng(8)
+    rotation = rotation_from_rpy_deg([10, -170, 95])
+    oak_s = np.arange(0., 110., .01)
+    px4_s = np.arange(.004, 110., .01)
+    oak_w = guided_rates(oak_s) @ rotation + [.004, -.006, .003] + rng.normal(0, .002, (len(oak_s), 3))
+    px4_w = guided_rates(px4_s) + rng.normal(0, .002, (len(px4_s), 3))
+    oak = (T0 + np.round(oak_s * 1e9).astype(np.int64) - 12_300_000, oak_w)
+    px4 = (T0 + np.round(px4_s * 1e9).astype(np.int64), px4_w)
+    result = solve_gyros(oak, px4)
+    assert len(result["segments"]) >= 2 and result["holdout"]["consistent"]
+    assert abs(result["offset_ns"] - 12_300_000) < 500_000
+    assert rotation_error(result["rotation"], rotation) < .2

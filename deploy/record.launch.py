@@ -4,13 +4,15 @@ record-rosbag.sh prepares the output directory and seals it after launch exits.
 No sensor subscriptions, PID polling or signal escalation are implemented here.
 """
 from pathlib import Path
+import json
+import runpy
 import shutil
 import time
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, EmitEvent, ExecuteProcess, IncludeLaunchDescription,
+    DeclareLaunchArgument, EmitEvent, ExecuteProcess, IncludeLaunchDescription, LogInfo,
     OpaqueFunction, RegisterEventHandler, TimerAction,
 )
 from launch.event_handlers import OnProcessExit, OnShutdown
@@ -18,7 +20,6 @@ from launch.events import Shutdown
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
 
 def recording_actions(context):
     def value(name):
@@ -28,6 +29,9 @@ def recording_actions(context):
     duration, warmup = int(value('duration')), int(value('warmup'))
     if duration < 0 or warmup < 0 or not (output / 'topics.txt').is_file():
         raise ValueError('Use record-rosbag.sh to prepare a new session first')
+    guidance = runpy.run_path(str(output / 'recording.py'))
+    calibration_phases = guidance['CALIBRATION_PHASES']
+    phase_record = guidance['phase_record']
 
     def write(name, text):
         (output / name).write_text(f'{text}\n')
@@ -39,11 +43,26 @@ def recording_actions(context):
     recorder = ExecuteProcess(
         cmd=['ros2', 'bag', 'record', '-s', 'mcap', '--max-cache-size', '104857600',
              '--max-bag-size', '1073741824', '--storage-config-file', str(output / 'mcap.yaml'),
+             '--qos-profile-overrides-path', str(output / 'rosbag-qos.yaml'),
              '-o', str(output / 'bag'), *(output / 'topics.txt').read_text().splitlines()],
         name='rosbag2', output='log', sigterm_timeout='30', sigkill_timeout='5')
     checks = ExecuteProcess(
-        cmd=['bash', str(output / 'readiness-script.sh'), str(output), value('camera_only')],
+        cmd=['bash', str(output / 'readiness-script.sh'), str(output), value('camera_only'),
+             value('px4_imu_rate')],
         name='readiness', output='log')
+
+    phases = {'schema_version': 1, 'kind': 'calibration',
+              'meaning': 'Operator prompts; not measured motion or ground truth', 'phases': []}
+
+    def prompt_phase(_context, index):
+        row = phase_record(index, time.time_ns())
+        phases['phases'].append(row)
+        (output / 'calibration-phases.json').write_text(json.dumps(phases, indent=2) + '\n')
+        actions = [LogInfo(msg=f"Calibration {row['started_utc_ns']}: {row['instruction']}")]
+        if index + 1 < len(calibration_phases):
+            actions.append(TimerAction(period=float(row['duration_seconds']), actions=[
+                OpaqueFunction(function=prompt_phase, kwargs={'index': index + 1})]))
+        return actions
 
     def end_interval(_context):
         write('acquisition-end-ns.txt', time.time_ns())
@@ -54,10 +73,13 @@ def recording_actions(context):
     def begin_interval(_context):
         write('acquisition-start-ns.txt', time.time_ns())
         write('state', 'recording')
+        actions = []
+        if value('kind') == 'calibration':
+            actions.extend(prompt_phase(_context, 0))
         if duration:
-            return [TimerAction(period=float(duration), actions=[
-                OpaqueFunction(function=end_interval)])]
-        return []
+            actions.append(TimerAction(period=float(duration), actions=[
+                OpaqueFunction(function=end_interval)]))
+        return actions
 
     def process_exited(event, launch_context):
         if event.action is recorder:
@@ -92,6 +114,8 @@ def recording_actions(context):
         Node(package='depthai_ros_driver', executable='camera_node', name='oak',
              parameters=parameters, output='log', sigterm_timeout='10'),
         recorder,
+        ExecuteProcess(cmd=['python3', str(output / 'record-resources.py'), str(output)],
+                       name='resources', output='log'),
     ]
     if value('start_mavros') == 'true':
         actions.append(IncludeLaunchDescription(
@@ -111,5 +135,7 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_only', default_value='false'),
         DeclareLaunchArgument('start_mavros', default_value='false'),
         DeclareLaunchArgument('fcu_url', default_value='/dev/ttyUSB0:921600'),
+        DeclareLaunchArgument('kind', default_value='survey'),
+        DeclareLaunchArgument('px4_imu_rate', default_value='0'),
         OpaqueFunction(function=recording_actions),
     ])

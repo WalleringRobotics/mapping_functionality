@@ -39,6 +39,18 @@ def parser():
     ownership.add_argument("--camera-only", action="store_true")
     ownership.add_argument("--start-mavros", action="store_true", help="Own MAVROS for this session; otherwise reuse it")
     record.add_argument("--fcu-url", default="/dev/ttyUSB0:921600")
+    record.add_argument("--px4-imu-rate", type=int, choices=[0, 100], default=0,
+                        help="Request PX4 IMU Hz per session (existing MAVROS only); 0 leaves streams alone")
+    calibration_record = commands.add_parser("calibrate-record", help="110-second guided motion recording")
+    calibration_record.add_argument("--output", type=Path, required=True)
+    calibration_record.add_argument("--config", type=Path, default=Path("configs/oakd-ros-calibration.yaml"))
+    calibration_record.add_argument("--device-id")
+    calibration_record.add_argument("--warmup", type=nonnegative_integer, default=60)
+    calibration_record.add_argument("--require-mount", type=Path)
+    calibration_record.add_argument("--camera-only", action="store_true")
+    calibration_record.add_argument("--px4-imu-rate", type=int, choices=[0, 100], default=100,
+                                    help="100 requests matched PX4 rates; 0 preserves existing rates")
+    calibration_record.set_defaults(duration=110, start_mavros=False, fcu_url="/dev/ttyUSB0:921600")
     bag_import = commands.add_parser("bag-import", help="Offline lossless image import from a sealed ROS recording")
     bag_import.add_argument("session", type=Path)
     bag_import.add_argument("--output", type=Path, required=True)
@@ -82,12 +94,18 @@ def parser():
     validate = commands.add_parser("validate", help="Audit dataset integrity, gaps and timing")
     validate.add_argument("session", type=Path)
     validate.add_argument("--report", type=Path)
+    validate.add_argument("--rig-calibration", type=Path, help="Compare bag IMU timing/mounting against this calibration")
+    validate.add_argument("--calibration-warn-sigma", type=positive, default=3.0)
+    validate.add_argument("--calibration-fail-sigma", type=positive, default=5.0)
     sync = commands.add_parser("sync", help="Audit exposure-to-PX4 timing and associate vehicle poses")
     sync.add_argument("session", type=Path)
     sync.add_argument("--output", type=Path, required=True)
     sync.add_argument("--stream", choices=["rgb", "left", "right"], default="rgb")
     sync.add_argument("--min-fraction", type=float, default=.9)
-    sync.add_argument("--rig-calibration", type=Path, help="Apply camera->body transform and OAK->PX4 time offset")
+    sync.add_argument("--rig-calibration", type=Path, help="Compose diagnostic camera poses with explicit timing qualification limits")
+    from .bag_association import add_arguments as bag_sync_arguments
+    bag_sync = commands.add_parser("sync-bag", help="Associate diagnostic camera poses from sealed ROS recordings")
+    bag_sync_arguments(bag_sync)
     ntrip = commands.add_parser("ntrip", help="Forward verified fixed-base NTRIP v2 corrections through MAVROS")
     ntrip.add_argument("--config", type=Path, required=True)
     ntrip.add_argument("--output", type=Path, required=True)
@@ -98,7 +116,7 @@ def parser():
     images_accuracy.add_argument("--profile", type=Path, required=True)
     images_accuracy.add_argument("--output", type=Path, required=True)
     images_accuracy.add_argument("--project", type=Path, help="Restrict geolocation to an existing selected image export")
-    images_accuracy.add_argument("--rig-calibration", type=Path, help="Lever arm and camera latency from the rig calibration used by sync")
+    images_accuracy.add_argument("--rig-calibration", type=Path, help="Use lever arm and uncertainty from the same rig file as sync")
     map_accuracy = commands.add_parser("map-accuracy", help="Assess withheld checkpoints and reference-aware map accuracy")
     map_accuracy.add_argument("checkpoints", type=Path)
     map_accuracy.add_argument("--profile", type=Path, required=True)
@@ -122,6 +140,12 @@ def parser():
     solve.add_argument("--calibration", type=Path, required=True, help="Rig calibration to start from (not modified)")
     solve.add_argument("--output", type=Path, required=True, help="New directory for the updated calibration and report")
     solve.add_argument("--max-offset-ms", type=float, default=200.0)
+    camera_solve = commands.add_parser("calibrate-camera", help="Estimate camera-to-IMU rotation and timing with a stereo cross-check")
+    camera_solve.add_argument("session", type=Path)
+    camera_solve.add_argument("--calibration", type=Path, required=True)
+    camera_solve.add_argument("--output", type=Path, required=True)
+    camera_solve.add_argument("--camera", choices=["left", "right"], default="left")
+    camera_solve.add_argument("--max-offset-ms", type=positive, default=50.0)
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -154,16 +178,37 @@ def parser():
     dense.add_argument("--execute", action="store_true")
     accuracy = commands.add_parser("accuracy", help="Report independent checkpoint residuals")
     accuracy.add_argument("checkpoints", type=Path)
+    from .calibration_mission import add_arguments
+    mission = commands.add_parser("calibrate-mission", help="Generate a bounded offline QGroundControl mission draft")
+    add_arguments(mission)
+    from .calibration_flight import add_arguments as flight_arguments
+    flight = commands.add_parser("calibrate-flight-phases", help="Extract sealed mission progress with numbering evidence")
+    flight_arguments(flight)
+    calibration = commands.add_parser("calibrate", help="Record, solve and verify rig calibration")
+    modes = calibration.add_subparsers(dest="calibration_command", required=True)
+    for name in ("record", "solve", "camera", "mission", "flight-phases"):
+        flat = f"calibrate-{name}"
+        if flat in commands.choices:
+            mode = modes.add_parser(name, parents=[commands.choices[flat]], add_help=False)
+            mode.set_defaults(command=flat)
     return result
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
-        if args.command == "inspect":
+        if args.command == "calibrate-mission":
+            from .calibration_mission import run
+            result = run(args)
+        elif args.command == "calibrate-flight-phases":
+            from .calibration_flight import run
+            result = run(args)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "inspect":
             from .oak import inspect_device
             result = inspect_device(args.device_id)
-        elif args.command in {"record", "capture"}:
+        elif args.command in {"record", "capture", "calibrate-record"}:
             import os
             repo = Path(__file__).resolve().parents[2]
             launcher = repo / "deploy/run-ros.sh"
@@ -172,7 +217,12 @@ def main(argv=None):
             command = ["bash", str(launcher), "bash", str(repo / "deploy/record-rosbag.sh"),
                        "--output", str(args.output.resolve()), "--config", str(args.config.resolve()),
                        "--duration", str(args.duration), "--warmup", str(args.warmup),
-                       "--fcu-url", args.fcu_url]
+                       "--fcu-url", args.fcu_url,
+                       "--px4-imu-rate", str(0 if args.camera_only else args.px4_imu_rate)]
+            if args.command == "calibrate-record":
+                command.extend(["--kind", "calibration"])
+                print("Calibration: props off, support the rigid rig, protect cables, and keep "
+                      "a textured scene at least 2 m away. Wait for the live motion prompts.", flush=True)
             for flag, value in (("--device-id", args.device_id), ("--require-mount", args.require_mount)):
                 if value:
                     command.extend([flag, str(value)])
@@ -247,7 +297,14 @@ def main(argv=None):
             if (args.session / "state").is_file() or (args.session / "bag").is_dir():
                 from .bags import audit_bag
                 result = audit_bag(args.session)
+                if args.rig_calibration:
+                    from .calibration_drift import add_to_validation
+                    add_to_validation(result, args.session, args.rig_calibration,
+                                      warn_sigma=args.calibration_warn_sigma,
+                                      fail_sigma=args.calibration_fail_sigma)
             else:
+                if args.rig_calibration:
+                    raise ValueError("--rig-calibration drift checking requires a ROS bag session")
                 result = validate(args.session)
             if args.report:
                 if args.report.resolve().is_relative_to(args.session.resolve()):
@@ -258,6 +315,11 @@ def main(argv=None):
         elif args.command == "sync":
             from .association import associate
             result = associate(args.session, args.output, args.stream, args.min_fraction, args.rig_calibration)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "sync-bag":
+            from .bag_association import run
+            result = run(args)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
         elif args.command == "ntrip":
@@ -312,6 +374,10 @@ def main(argv=None):
             except BaseException:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
+        elif args.command == "calibrate-camera":
+            from .calibration_workflow import solve_camera
+            result = solve_camera(args.session, args.calibration, args.output,
+                                  camera=args.camera, max_offset_ms=args.max_offset_ms)
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,

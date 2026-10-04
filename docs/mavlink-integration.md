@@ -238,3 +238,47 @@ Automated coverage includes clock conversion, stale/degraded gates, PX4 reset,
 interpolation, original-message preservation, shutdown and ROS services/DDS/CDR.
 The actual OAK/PX4/Orin path and physical synchronization remain bench acceptance
 work; software tests cannot establish their accuracy.
+
+
+## Temporary PX4 IMU rate requests
+
+`wr-map record --output runs/rate-001 --duration 60 --warmup 60 --px4-imu-rate 100`
+requests 100 Hz for HIGHRES_IMU (message 105 → `/mavros/imu/data_raw`) and
+ATTITUDE_QUATERNION (31 → `/mavros/imu/data`). The pinned
+[MAVROS IMU plugin](https://github.com/mavlink/mavros/blob/5c68b905ab30de6ce630822dc46c33467e8f23ea/mavros/src/plugins/imu.cpp)
+prefers HIGHRES_IMU over RAW_IMU/SCALED_IMU; its `data` output follows quaternion
+attitude (or ATTITUDE before any quaternion report), with cached acceleration.
+Changing only HIGHRES_IMU therefore does not raise both ROS topics.
+
+The mechanism is `MAV_CMD_SET_MESSAGE_INTERVAL` (511), via
+`/mavros/cmd/command` (`mavros_msgs/srv/CommandLong`), param1 = message ID,
+param2 = 10000 microseconds. The session stores a pending record before each
+request, then its timestamps, ACK result and success in `px4-rate-request.json`.
+An ACK confirms command acceptance, not achieved rate. `wr-map validate` measures
+each recorded IMU rate and fails below 95 Hz; the bench acceptance target remains
+at least 99 Hz on `data_raw` with unchanged timing/pose/loss qualification.
+
+This option requires an already running MAVROS owner so cleanup can use it after
+recorder shutdown, failure or Ctrl+C. It cannot be combined with `--start-mavros`
+or `--camera-only`. Ordinary recordings leave FCU streams untouched unless this
+option is selected. Calibration recordings select it by default. The recorder
+sends interval **0** for both messages on cleanup and seals the ACK evidence as
+`px4-rate-restore.json`. Per the
+[MAVLink interval command](https://mavlink.io/en/messages/common.html#MAV_CMD_SET_MESSAGE_INTERVAL),
+zero restores **firmware defaults**, not an unknown earlier custom interval.
+Coordinate with any other stream-rate controller; do not use this option when
+another consumer needs custom rates. If restoration fails, the session fails
+explicitly; inspect the report and retry the bounded helper while MAVROS/PX4 are
+connected:
+
+```bash
+bash deploy/run-ros.sh python3 -m wallering_mapping.recording --rate 0 \
+  --report runs/px4-rate-restore-retry.json
+```
+
+Power loss or SIGKILL cannot guarantee cleanup. Rebooting PX4 or restarting its
+MAVLink instance restores startup stream configuration. No PX4 parameter, SD-card
+startup script or persistent configuration is modified. Requested/achieved rates,
+TIMESYNC RTT and offset residual, pose delivery and raw MAVLink source loss must
+still be compared before/after on the actual TELEM2 link; a bandwidth estimate or
+command ACK does not qualify the link.

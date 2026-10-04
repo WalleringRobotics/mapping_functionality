@@ -92,11 +92,16 @@ def validate(root, decode=True):
             intervals = [float(t) for t in np.diff(times) / 1e6]
             if gaps[stream]:
                 warnings.append(f"{stream}: {gaps[stream]} sequence gaps")
-            if intervals and max(intervals) > 2500 / manifest["config"]["fps"]:
+            requested_fps = manifest["device"].get("stream_settings", {}).get(stream, {}).get(
+                "fps", manifest["config"]["fps"])
+            if not np.isfinite(requested_fps) or requested_fps <= 0:
+                raise ValueError(f"Invalid requested frame rate on {stream}")
+            if intervals and max(intervals) > 2500 / requested_fps:
                 warnings.append(f"{stream}: frame interval exceeds 2.5 requested periods")
             report["streams"][stream] = {
                 "frames": counts[stream], "sequence_gaps": None if ros_import else gaps[stream],
                 "interval_ms": distribution(intervals),
+                "requested_fps": requested_fps,
                 "observed_fps": ((len(times) - 1) * 1e9 / (times[-1] - times[0])
                                  if len(times) > 1 and times[-1] > times[0] else None),
             }
