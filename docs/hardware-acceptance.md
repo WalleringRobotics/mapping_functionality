@@ -4,12 +4,38 @@ See the [command guide](hardware-commands.md) for the complete reproducible comm
 set and passive serial diagnostics, and the
 [repository skill](../skills/jetson-mapping-checks/SKILL.md) for future agent sessions.
 
-**Update 2026-10-04:** BNO086 firmware is now 3.9.9. The default stack uses the
+**Update 2026-10-04:** The stack runs in the repository Docker image (verified below). BNO086 firmware is now 3.9.9. The default stack uses the
 official Luxonis ROS driver, MAVROS and standard rosbag2/MCAP. The final bench
 recording passes integrity and requested-window coverage at 2 fps and a 100 Hz
 IMU request. Survey readiness still requires physical timing/rig calibration and
 missing GNSS/RTK evidence. OAK runtime USB is SUPER (5 Gbit/s); TELEM2 remains
 921600 baud with flow control off.
+
+## Repository Docker runtime verified: 2026-10-04
+
+The recording stack now runs in this repository's image (`docker/Dockerfile`,
+`wallering-mapping:humble`, 867 MB) instead of the 42 GB `drone_autonomy_platform:orin`
+image. It was built on this Orin from commit `3afdf48` and repeated the launch
+acceptance below through the unchanged `wr-map capture` entry point. Packages come
+from the 2026-08-07 ROS snapshot: driver 2.12.2, MAVROS/extras 2.14.0,
+rosbag2/MCAP 0.15.16; PyCOLMAP 3.12.6 is built against Ceres 2.2.0.
+
+| Check | Result |
+|---|---|
+| Complete suite in the image (Orin and arm64 CI) | 168 passed, none skipped, including ROS integration and PyCOLMAP processing |
+| Full stack, `--start-mavros`, 60 s warmup + 60 s | `valid`, `capture_ready`, `coverage_complete` true; window 60.008 s; RGB/left/right 2.0 Hz; OAK IMU 99.54 Hz; PX4 IMU 50 Hz, pose 30 Hz, timesync 10 Hz; PX4 connected throughout the window; timing gate met (644 qualified, best streak 1144 of 501 required) |
+| Unbounded camera-only run, `docker stop` | Clean launch shutdown, sealed `complete` within 21 s; 18.119 s window passes integrity and coverage; worst image tail gap 0.353 s |
+| Device and ownership | OAK negotiated USB SUPER; sessions owned by the invoking user; image ID and package manifest stored in each session |
+
+Audit verdicts and warnings match `launch-001`; calibration and effective driver
+parameters are identical. `mavros_extras` adds `/mavros/gpsstatus/gps1/raw` (5 Hz),
+previously absent. One PX4 timesync RTT outlier reached 155 ms (p95 5.1 ms, reference
+5.2 ms). Survey readiness remains false for the reasons below. Evidence is under
+ignored `runs/docker-verify-20261004-001`.
+
+The earlier manual PyCOLMAP procedure never produced a wheel: its bindings need
+Ceres >= 2.1 and auditwheel needs patchelf >= 0.14.5, both newer than Ubuntu 22.04's.
+The image builds both pinned versions.
 
 ## ROS launch ownership verified: 2026-10-04
 
