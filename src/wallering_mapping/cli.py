@@ -82,6 +82,9 @@ def parser():
     validate = commands.add_parser("validate", help="Audit dataset integrity, gaps and timing")
     validate.add_argument("session", type=Path)
     validate.add_argument("--report", type=Path)
+    validate.add_argument("--rig-calibration", type=Path, help="Compare bag IMU timing/mounting against this calibration")
+    validate.add_argument("--calibration-warn-sigma", type=positive, default=3.0)
+    validate.add_argument("--calibration-fail-sigma", type=positive, default=5.0)
     sync = commands.add_parser("sync", help="Audit exposure-to-PX4 timing and associate vehicle poses")
     sync.add_argument("session", type=Path)
     sync.add_argument("--output", type=Path, required=True)
@@ -122,6 +125,12 @@ def parser():
     solve.add_argument("--calibration", type=Path, required=True, help="Rig calibration to start from (not modified)")
     solve.add_argument("--output", type=Path, required=True, help="New directory for the updated calibration and report")
     solve.add_argument("--max-offset-ms", type=float, default=200.0)
+    camera_solve = commands.add_parser("calibrate-camera", help="Estimate camera-to-IMU rotation and timing with a stereo cross-check")
+    camera_solve.add_argument("session", type=Path)
+    camera_solve.add_argument("--calibration", type=Path, required=True)
+    camera_solve.add_argument("--output", type=Path, required=True)
+    camera_solve.add_argument("--camera", choices=["left", "right"], default="left")
+    camera_solve.add_argument("--max-offset-ms", type=positive, default=50.0)
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -247,7 +256,14 @@ def main(argv=None):
             if (args.session / "state").is_file() or (args.session / "bag").is_dir():
                 from .bags import audit_bag
                 result = audit_bag(args.session)
+                if args.rig_calibration:
+                    from .calibration_drift import add_to_validation
+                    add_to_validation(result, args.session, args.rig_calibration,
+                                      warn_sigma=args.calibration_warn_sigma,
+                                      fail_sigma=args.calibration_fail_sigma)
             else:
+                if args.rig_calibration:
+                    raise ValueError("--rig-calibration drift checking requires a ROS bag session")
                 result = validate(args.session)
             if args.report:
                 if args.report.resolve().is_relative_to(args.session.resolve()):
@@ -312,6 +328,10 @@ def main(argv=None):
             except BaseException:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
+        elif args.command == "calibrate-camera":
+            from .calibration_workflow import solve_camera
+            result = solve_camera(args.session, args.calibration, args.output,
+                                  camera=args.camera, max_offset_ms=args.max_offset_ms)
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,

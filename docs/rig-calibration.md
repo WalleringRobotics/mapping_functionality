@@ -104,7 +104,8 @@ px4_ros_stamp` offset, both `estimated`) and a report; the input file is not mod
   before any data is read; the seal's hash is recorded as evidence. Device identity is
   checked before solving, and the output directory appears only once complete.
 - **Refusals:** a principal rotation axis below 0.3 rad/s RMS (rotate about every axis),
-  fewer than two well-excited segments, an offset at the search limit, or a reflection
+  fewer than two well-excited segments or an unexcited holdout, residual above 0.1 rad/s,
+  an offset at the search limit, or a reflection
   fitting far better than a rotation (an IMU axis/handedness convention error).
 - **Gaps:** OAK gaps over 50 ms are skipped, not interpolated, and counted in
   `skipped_for_oak_gaps`.
@@ -116,10 +117,21 @@ px4_ros_stamp` offset, both `estimated`) and a report; the input file is not mod
 
 ## Camera-to-IMU solver
 
-`wallering_mapping.calibration_camera.solve_camera_imu(session)` estimates
+```bash
+deploy/run-platform-command.sh wr-map calibrate-camera runs/<calibration-session> \
+  --calibration runs/rig-calibration/rig.json --output runs/rig-calibration/camera-001
+```
+
+The supported `calibrate-camera` command estimates
 `oak_imu_frame -> oak_left_camera_optical_frame` and the `oak_camera_exposure -> oak_imu`
 offset ([#10](https://github.com/WalleringRobotics/mapping_functionality/issues/10)) without
-a target. It returns a report whose `entries` drop into this file as `estimated`.
+a target. It writes a new `rig-calibration.json` and `report.json` together, leaving
+both the source session and the original rig file intact. Device identity and the seal
+are checked before solving; successful left/right agreement is required. A disagreement
+with the manual body-to-camera mounting also refuses publication when both link sigmas
+are known. The underlying `solve_camera_imu()` API returns a report with `estimated`
+entries; explicitly disabling its stereo cross-check returns unqualified diagnostics
+and no entries.
 
 Method: corners are tracked (pyramidal LK, forward-backward checked) over `stride` frames
 (default 3) on the global-shutter left mono stream; each pair's rotation comes from the
@@ -146,7 +158,10 @@ Assumptions and limits:
   Factory intrinsics and distortion are trusted, not re-estimated.
 - It refuses, with a `ValueError`, recordings whose weakest rotation direction has an RMS
   rate below 0.15 rad/s (static, single-axis or pure translation), cameras below 10 fps,
-  textureless scenes, fewer than 100 usable frame pairs, and an offset at the scan limit.
+  textureless scenes, fewer than 100 usable frame pairs after residual rejection,
+  camera/gyro residual above 0.02 rad, and an offset at the scan limit. Pairs crossing
+  IMU gaps over 50 ms are excluded. Every sample must use the expected frame and have
+  finite rates and increasing stamps; changing camera geometry is refused.
 
 What the calibration recording ([#8](https://github.com/WalleringRobotics/mapping_functionality/issues/8))
 should provide: mono left and right at 20 fps (≥ 10 fps) with `/oak/imu/data` at 100 Hz;
@@ -169,3 +184,28 @@ applied here, and this explicitly blocks survey readiness. Unknown factory
 camera-to-camera covariance is preserved and also blocks RGB/right qualification.
 The accuracy profile must still supply measured exposure latency and vehicle
 attitude bounds; mounting sigma and gyro lag sigma do not substitute for them.
+
+
+## Drift checks on survey recordings
+
+```bash
+deploy/run-platform-command.sh wr-map validate runs/<session> \
+  --rig-calibration runs/rig-calibration/rig.json \
+  --calibration-warn-sigma 3 --calibration-fail-sigma 5 \
+  --report runs/<session>-validation.json
+```
+
+For a ROS bag session, `calibration_check` reuses the IMU solver and compares the stored
+OAK-to-PX4 rotation and time offset with an independent estimate. Offset differences are
+normalized by the root-sum-square of both one-sigma errors. Rotation differences use a
+body-frame rotation vector normalized per axis by the combined sigmas; its vector length
+is the reported rotation score. The larger score determines `pass`, `warn` (at least 3),
+or `fail` (at least 5); both thresholds are configurable. A failed check makes validation
+exit 2 and recommends inspecting the mounting/clocks and recording a new calibration.
+The stored file is never modified.
+
+Static or inadequately excited recordings report `insufficient_motion`, which is expected
+on a bench. Missing reference links or uncertainties report `unqualified`; neither claims
+a drift pass. Corrupt recordings, incorrect device identity, bad gyro data or inconsistent
+fits fail the check. This check only measures relative sensor timing, including differing
+filter delays; it does not qualify absolute camera exposure timing.
