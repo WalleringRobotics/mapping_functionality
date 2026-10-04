@@ -119,6 +119,10 @@ untextured and can fill gaps; retain the measured cloud and inspect invented sur
 Single-camera SfM cannot determine scale, rotation or translation from pixels alone.
 Apply measured control/scale alignment separately before evaluating metric errors.
 Neither IMU nor the OAK stereo baseline is used as a metric constraint in this version.
+The implemented `georeference` command uses qualified, exposure-aligned RTK camera
+centres to align a selected COLMAP model and its PLY products. Follow the
+[RTK workflow](rtk-accuracy.md#buildingsobjects) for calibration, geometry gates,
+product selection and the stored local-origin convention.
 
 ## Terrain recipe and control inputs
 
@@ -153,7 +157,10 @@ Rows contain `image X Y Z`, optionally followed by
 Use ODM's axis/angle conventions [R9](references.md), positive stated uncertainties,
 and actual calibrated camera positions at exposure time. At least three noncollinear
 XY camera positions are required. GNSS receipt time is not camera exposure time.
-The current recorder does not acquire GNSS or generate this file.
+The optional MAVROS recorder acquires raw receiver evidence; `image-accuracy`
+generates this file from qualified RTK positions and calibrated lever arms. See
+[RTK geolocation](rtk-accuracy.md#terrain). The optional recipe `gps_accuracy_m`
+explicitly sets ODM's prior weight; it does not declare measured map accuracy.
 
 ```bash
 wr-map process /data/sessions/terrain-001 --config configs/process-terrain.json \
@@ -224,3 +231,10 @@ uncertainty, coverage, outliers/exclusions and repeat-survey behavior. A success
 process exit, low reprojection error or fine output grid does not establish centimetre
 accuracy. Hardware capture and a full real-survey reconstruction remain commissioning
 gates for both product recipes.
+
+For reference-aware reporting, use `wr-map map-accuracy` with the
+[map profile and extended checkpoint CSV](rtk-accuracy.md#total-map-accuracy-breakdown).
+It reports reference sigmas, same-base correlation, vertical errors, surface-class
+statistics and coverage alongside the observed comparison. Link the completed
+workflow and image report; for building products also link the sealed georeference.
+The original `accuracy` command remains a lightweight residual-only calculation.

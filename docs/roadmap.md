@@ -41,13 +41,17 @@ mapping when integrating multiple cameras and navigation sensors.
 3. Add optional camera-side MJPEG or raw chunk storage only if measured bandwidth/CPU
    requires it. Preserve exact frame/timestamp association and restart recovery.
 4. Add a controlled recovery command for interrupted sessions; never mutate originals.
-5. Add GNSS/flight-controller adapter with raw messages, clock mapping and event marks.
+5. Bench-qualify the implemented receive-only MAVROS adapter and clock mapping;
+   qualify corrected rover camera geolocation and NTRIP forwarding against the actual
+   receiver/base. Camera and map budget reports are implemented; native receiver
+   correction-age evidence and explicit survey event marks need further integration.
 6. Add calibration tooling (intrinsics, distortion, camera-camera, camera-IMU, timing),
    explicit metre/unit/frame conventions, and uncertainty evidence.
 7. Build a calibrated stereo/rig reconstruction adapter with validated exposure pairing.
    Do not assume nearest timestamps alone are sufficient.
 8. Qualify the implemented ODM camera conversion, pinned runner and GCP/geo ingestion
-   on a real survey; extend raster/CRS checks and geodetic QA.
+   on a real survey; qualify the COLMAP metric alignment and independent checkpoint
+   breakdown. Extend raster/CRS checks and geodetic QA.
 9. Add large-dataset matching, scene masks and repeat-survey comparisons after small
    surveys consistently meet their defined accuracy objectives.
 
@@ -57,4 +61,3 @@ Camera/lens/focus, mounting stiffness, shutter mode/resolution, FPS, compression
 USB cable/hub, storage device/filesystem, power supply, thermal setup, DepthAI, JetPack,
 and concurrent workloads can affect data quality or continuity. Retain versioned
 profiles and calibration identities; do not infer equivalence from a successful launch.
-

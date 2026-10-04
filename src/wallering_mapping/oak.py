@@ -1,5 +1,6 @@
 """DepthAI 3.10 adapter. All hardware access is isolated in this module."""
 
+import queue
 import signal
 import sys
 import threading
@@ -8,6 +9,7 @@ from contextlib import contextmanager
 
 from .dataset import AsyncWriter, Session
 from .operations import host_health
+from .timing import ClockTracker, sample_clock
 
 
 def nanoseconds(delta):
@@ -120,27 +122,51 @@ def frame_metadata(message, dai):
     }
 
 
-def record(root, config, duration=None, device_id=None):
+@contextmanager
+def telemetry_subscriber(config):
+    if config is None:
+        yield None
+        return
+    from .mavros import MavrosSubscriber
+    source = MavrosSubscriber(config)
+    try:
+        yield source
+    finally:
+        source.close()
+
+
+def record(root, config, duration=None, device_id=None, telemetry_config=None):
     dai = depthai()
-    with dai.Device(device_id) if device_id else dai.Device() as device:
+    with (dai.Device(device_id) if device_id else dai.Device()) as device, telemetry_subscriber(telemetry_config) as telemetry:
         details = device_details(device, dai)
         if device.getUsbSpeed() not in (dai.UsbSpeed.SUPER, dai.UsbSpeed.SUPER_PLUS):
             raise RuntimeError("USB 3 is required for this full-resolution recorder; check cable/port")
         pipeline, queues, calibration, settings = build_pipeline(device, dai, config)
         details.update(stream_settings=settings, imu_enabled="imu" in queues)
-        session = Session(root, config, "oak", details, calibration)
+        telemetry_contract = None if telemetry is None else {
+            "schema_version": 1, "adapter": "mavros_ros2", "receive_only": True,
+            "config": telemetry_config.to_dict(), "parameters": telemetry.buffer.parameters,
+            "frames": "MAVROS local pose ENU, body FLU; OAK IMU sensor-native",
+            "altitude": "MAVROS NavSatFix WGS84 ellipsoidal height; not AMSL",
+            "timestamp": "Original MAVROS ROS header plus bracketed receipt clocks; not raw PX4 timestamps",
+            "limitations": "DDS loss not observable from header; timing qualification is an evidence gate",
+        }
+        session = Session(root, config, "oak", details, calibration, telemetry_contract)
         writer = AsyncWriter(session)
         status, reason, failure = "complete", "requested stop", None
         try:
             with stop_signals() as stop:
                 pipeline.start()
+                if telemetry:
+                    telemetry.start()
                 start = time.monotonic()
                 ready = start + config.warmup_seconds
                 last_received = dict.fromkeys(queues, start)
                 last_imu = {}
                 imu_received = dict.fromkeys(("accelerometer", "gyroscope"), ready)
-                clock_due = start
+                clock_due = telemetry_due = start
                 progress_due = start
+                clock_tracker = ClockTracker(telemetry_config.clock_jump_ms if telemetry_config else 5)
                 while not stop.is_set():
                     now = time.monotonic()
                     if duration is not None and now >= ready + duration:
@@ -149,6 +175,13 @@ def record(root, config, duration=None, device_id=None):
                     if not pipeline.isRunning():
                         raise RuntimeError("Camera pipeline stopped unexpectedly")
                     writer.check()
+                    if telemetry:
+                        telemetry.buffer.check()
+                        if now >= telemetry_due:
+                            batch = telemetry.buffer.drain()
+                            if batch:
+                                writer.submit("telemetry_batch", batch)
+                            telemetry_due = now + .2
                     for name, q in queues.items():
                         rows = []
                         # Limit work per queue so images cannot starve the IMU or stop checks.
@@ -186,18 +219,20 @@ def record(root, config, duration=None, device_id=None):
                         if rows:
                             writer.submit("imu_batch", rows)
                     if now >= clock_due:
-                        writer.submit("append", "clock", {
-                            "host_monotonic_ns": time.monotonic_ns(),
-                            "depthai_clock_ns": nanoseconds(dai.Clock.now()),
-                            "host_utc_ns": time.time_ns(),
-                        })
-                        clock_due = now + 1
+                        observation = sample_clock(lambda: nanoseconds(dai.Clock.now()), "depthai_steady")
+                        clock_tracker.observe(observation)
+                        observation["host_utc_ns"] = time.time_ns()
+                        writer.submit("append", "clock", observation)
+                        clock_due = now + (1 / telemetry_config.clock_sample_hz if telemetry_config else 1)
                     for name, received in last_received.items():
                         if now - received > config.stall_seconds:
                             raise RuntimeError(f"Stream {name} stalled")
                     if now >= progress_due:
+                        health = host_health(root)
+                        if telemetry:
+                            health["telemetry"] = telemetry.buffer.summary()
                         writer.submit("heartbeat", "warmup" if now < ready else "recording",
-                                      host_health(root), writer.queue.qsize())
+                                      health, writer.queue.qsize())
                         print(f"recording {root}: saved={dict(session.counts)} "
                               f"writer_queue={writer.queue.qsize()}", file=sys.stderr, flush=True)
                         progress_due = now + 5
@@ -209,8 +244,29 @@ def record(root, config, duration=None, device_id=None):
         except BaseException as error:
             status, reason, failure = "failed", str(error), error
         finally:
-            # Drain accepted data before closing the device. Hardware queue tails at the
-            # stop boundary are not part of the accepted recording interval.
+            # Stop callbacks before draining accepted data into the one dataset writer.
+            if telemetry:
+                try:
+                    telemetry.close()
+                    telemetry.buffer.finish_check()
+                except Exception as error:
+                    status, reason, failure = "failed", str(error), error
+                session.manifest["telemetry"]["summary"] = telemetry.buffer.summary()
+                try:
+                    while not telemetry.buffer.queue.empty():
+                        batch = telemetry.buffer.drain(check=False)
+                        # A bounded blocking handoff during shutdown drains accepted records.
+                        writer.check()
+                        while writer.thread.is_alive():
+                            writer.check()
+                            try:
+                                writer.queue.put(("telemetry_batch", (batch,)), timeout=.1)
+                                break
+                            except queue.Full:
+                                pass
+                except Exception as error:
+                    status, reason, failure = "failed", str(error), error
+            # Hardware queue tails at the stop boundary are outside the accepted interval.
             try:
                 writer.close()
             except Exception as error:

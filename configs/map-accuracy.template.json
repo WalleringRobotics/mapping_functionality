@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "crs": null,
+  "vertical_datum": null,
+  "reference_survey_evidence": null,
+  "independence_evidence": null,
+  "map_product_evidence": null,
+  "control_ids": [],
+  "shared_base_with_map": true,
+  "shared_base_covariance_map_xyz_m2": null,
+  "checkpoint_sigmas_exclude_shared_base": true,
+  "minimum_checkpoints": 30,
+  "horizontal_target_rmse_m": 0.1,
+  "vertical_target_rmse_m": 0.15,
+  "map_extent_xy_m": null,
+  "model_coordinates": "absolute",
+  "model_origin_xyz_m": null
+}

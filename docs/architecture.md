@@ -27,7 +27,7 @@ flowchart TD
 
 | Decision | Reason | Cost / alternative |
 |---|---|---|
-| Native Python + DepthAI v3 | Small deployment, direct metadata access | Add ROS2/MCAP when autonomy integration needs it |
+| Native Python + DepthAI v3, optional MAVROS subscriber | Direct camera metadata plus the existing companion telemetry link | ROS runtime needed only for telemetry acquisition; one OAK owner |
 | Full-FOV images without rectification | Preserve native geometry for recalibration | More USB bandwidth than encoded video |
 | Individual RGB JPEG / mono PNG | Independently readable images after failures | JPEG is lossy; RGB PNG costs more CPU/storage |
 | Host encoding at low FPS | Straightforward per-image evidence and calibration linkage | Benchmark Nano; no NVENC is assumed [R6] |
@@ -49,6 +49,16 @@ COLMAP models and exports poses/quality. `odm.py` prepares calibrated working im
 transforms GCP pixels, checks the pinned engine's camera override, and runs terrain
 products. `control.py` validates supplied controls/geolocation. `operations.py`
 provides preflight, live capture status and software/machine provenance.
+`mavros.py` receives independent ROS telemetry through the existing MAVROS link;
+`timing.py` samples clock bridges and qualifies timing evidence.
+`telemetry_audit.py` validates preserved messages without ROS;
+`association.py` derives exposure-aligned vehicle poses without modifying sources.
+`rtcm.py` verifies correction frames and surveyed station coordinates; `ntrip.py`
+forwards verified corrections through the existing MAVROS plugin. `gnss_accuracy.py`
+interpolates corrected rover positions at exposure and propagates calibrated rig,
+base and timing uncertainty. `georeference.py` aligns COLMAP/PLY geometry to metric
+projected axes; `map_accuracy.py` reports withheld-checkpoint errors and reference
+uncertainty without fitting to the checks. See the [RTK accuracy design](rtk-accuracy.md).
 
 The current adapter assumes CAM_A=RGB, CAM_B=left, CAM_C=right. Missing sockets fail
 preflight. Other wiring requires an adapter change. USB 2 and PoE-only transport
@@ -57,11 +67,14 @@ are unsupported by this initial full-resolution USB adapter.
 ## Timing
 
 Image timestamps use the SDK's MIDDLE exposure offset in device and host-synchronized
-steady clocks. Host receipt UTC/monotonic values are separate. Clock snapshots help
-identify wall-clock jumps; receipt UTC is never treated as exposure time.
+steady clocks. Host receipt UTC/monotonic values are separate. Bracketed SDK and
+ROS clock observations map their independent epochs to Python monotonic time;
+receipt UTC is never treated as exposure time.
 
 One OAK supplies a common device clock, but a reboot begins a new session. External
-PPS/PTP/flight-controller synchronization is not implemented. Nearest-frame timestamp
+PPS/PTP hardware synchronization is not implemented. The optional PX4 integration
+uses the existing MAVROS TIMESYNC estimate with conservative qualification;
+see the [full timing review](mavlink-integration.md). Nearest-frame timestamp
 offsets do not prove simultaneous exposure. A rolling sensor still has row-dependent
 acquisition time even when its frame timestamp matches another camera.
 
@@ -102,4 +115,3 @@ accepted interval. Completion means orderly shutdown, not accuracy or no-gap app
 Filesystem durability also depends on drive caches and power. Regulated power,
 cooling, strain relief and shutdown reserve are system responsibilities. This
 recorder is not part of a flight-control or safety-critical runtime path.
-

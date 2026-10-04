@@ -42,7 +42,10 @@ def validate(root, decode=True):
         if sha256_file(root / "calibration.json") != manifest["calibration_sha256"]:
             errors.append("Calibration checksum mismatch")
         if manifest["status"] == "complete":
-            for name in ("frames", "imu", "events", "clock"):
+            journals = ["frames", "imu", "events", "clock"]
+            if "telemetry" in manifest:
+                journals.append("telemetry")
+            for name in journals:
                 if sha256_file(root / f"{name}.jsonl") != manifest.get("journals_sha256", {}).get(name):
                     errors.append(f"Journal checksum mismatch: {name}")
         previous = {}
@@ -126,9 +129,21 @@ def validate(root, decode=True):
             if file.is_file() and file.relative_to(root).as_posix() not in paths:
                 warnings.append(f"Unindexed image/tail file: {file.relative_to(root)}")
         # Audit all journals, including a torn final JSON line after a power loss.
-        for name in ("events", "clock"):
-            list(jsonl(root / f"{name}.jsonl"))
-    except (OSError, ValueError, KeyError, TypeError) as error:
+        list(jsonl(root / "events.jsonl"))
+        from .timing import ClockTracker
+        tracker = ClockTracker(manifest.get("telemetry", {}).get("config", {}).get("clock_jump_ms", 5))
+        for row in jsonl(root / "clock.jsonl"):
+            if row.get("kind") == "clock_bridge":
+                if row["target"] != "depthai_steady":
+                    raise ValueError("Invalid SDK clock bridge domain")
+                tracker.observe(row)
+        if "telemetry" in manifest:
+            from .telemetry_audit import audit_telemetry
+            telemetry = audit_telemetry(root, manifest)
+            report["telemetry"] = telemetry
+            errors.extend(telemetry["errors"])
+            warnings.extend(telemetry["warnings"])
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
         errors.append(str(error))
     report["valid"] = not errors
     return report

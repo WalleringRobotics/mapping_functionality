@@ -1,0 +1,34 @@
+{
+  "topics": {
+    "state": "/mavros/state",
+    "imu_raw": "/mavros/imu/data_raw",
+    "attitude": "/mavros/imu/data",
+    "pose": "/mavros/local_position/pose",
+    "gnss": "/mavros/global_position/global",
+    "timesync": "/mavros/timesync_status",
+    "time_reference": "/mavros/time_reference"
+  },
+  "time_node": "/mavros/uas_1/time",
+  "required": [
+    "state",
+    "imu_raw",
+    "pose",
+    "timesync"
+  ],
+  "queue_records": 4096,
+  "qos_depth": 100,
+  "stall_seconds": 5,
+  "parameter_timeout_seconds": 10,
+  "clock_sample_hz": 10,
+  "max_rtt_ms": 10,
+  "max_offset_residual_ms": 2,
+  "clock_jump_ms": 5,
+  "min_sync_samples": 501,
+  "max_clock_age_ms": 200,
+  "max_sync_age_ms": 500,
+  "max_pose_bracket_ms": 50,
+  "sdk_sync_budget_ms": 1,
+  "max_alignment_budget_ms": 5,
+  "max_gnss_age_ms": 200,
+  "px4_timestamp_budget_ms": 1
+}
