@@ -65,6 +65,10 @@ def check_session(session, calibration, *, warn_sigma=3.0, fail_sigma=5.0, **sol
     try:
         rig = calibration if isinstance(calibration, RigCalibration) else RigCalibration.read(calibration)
         check(rig, session)  # device identity must agree before comparing estimates
+        if not rig.oak_device_id:
+            return {"status": "unqualified", "thresholds": limits,
+                    "reason": "Stored calibration has no OAK device identity",
+                    "recommendation": "Associate the calibration with the measured OAK device before checking drift."}
         result = solve_session(session, **solver_options)
         report = compare(result, rig, **limits)
         report["evidence"] = {"seal_sha256": result["seal_sha256"],
@@ -81,12 +85,18 @@ def check_session(session, calibration, *, warn_sigma=3.0, fail_sigma=5.0, **sol
 
 def add_to_validation(report, session, calibration, **options):
     """Attach drift qualification without upgrading an invalid or unqualified bag audit."""
+    if not report["valid"]:
+        report["calibration_check"] = {
+            "status": "not_evaluated", "reason": "Bag integrity audit failed; calibration drift was not evaluated",
+            "recommendation": "Resolve the recording errors before checking drift."}
+        report["capture_ready"] = report["survey_ready"] = False
+        return report
     drift = check_session(session, calibration, **options)
     report["calibration_check"] = drift
     status = drift["status"]
     if status == "fail":
         report["errors"].append("Calibration drift check failed: " + drift.get("reason", drift["recommendation"]))
-        report["valid"] = report["survey_ready"] = False
+        report["valid"] = report["capture_ready"] = report["survey_ready"] = False
     elif status != "pass":
         report["warnings"].append(f"Calibration drift check: {status}: " + drift.get("reason", drift["recommendation"]))
     return report

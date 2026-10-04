@@ -15,6 +15,7 @@ def reference():
     oak, px4, _ = synthetic(seconds=40)
     result = solve_gyros(oak, px4)
     data = apply_entries(hand_measured(), calibration_entries(result))
+    data["hardware"]["oak_device_id"] = "TESTDEVICE"
     return result, RigCalibration(data)
 
 
@@ -88,9 +89,9 @@ def test_validation_failure_does_not_change_calibration(tmp_path, reference, mon
     _, rig = reference
     monkeypatch.setattr(drift, "check_session", lambda *a, **k: {
         "status": "fail", "recommendation": "Recalibrate"})
-    report = {"valid": True, "survey_ready": True, "warnings": [], "errors": []}
+    report = {"valid": True, "capture_ready": True, "survey_ready": True, "warnings": [], "errors": []}
     drift.add_to_validation(report, tmp_path, rig)
-    assert not report["valid"] and not report["survey_ready"]
+    assert not report["valid"] and not report["capture_ready"] and not report["survey_ready"]
     assert report["errors"] == ["Calibration drift check failed: Recalibrate"]
 
 
@@ -112,3 +113,29 @@ def test_validate_cli_includes_drift_and_failure_exit(tmp_path, reference, monke
     assert status == 2
     assert json.loads(report.read_text())["calibration_check"]["status"] == "fail"
     capsys.readouterr()
+
+
+def test_missing_identity_is_unqualified_without_solving(tmp_path, reference, monkeypatch):
+    _, rig = reference
+    data = copy.deepcopy(rig.data)
+    data["hardware"]["oak_device_id"] = None
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "TESTDEVICE_calibration.json").write_text(json.dumps({"cameraData": []}))
+    def unexpected(*args, **kwargs):
+        raise AssertionError("An unidentified calibration must not be solved")
+    monkeypatch.setattr(drift, "solve_session", unexpected)
+    report = drift.check_session(session, RigCalibration(data))
+    assert report["status"] == "unqualified" and "identity" in report["reason"]
+
+
+def test_invalid_bag_skips_solver_and_preserves_errors(tmp_path, monkeypatch):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("A damaged recording must not reach the drift solver")
+    monkeypatch.setattr(drift, "check_session", unexpected)
+    report = {"valid": False, "capture_ready": True, "survey_ready": True,
+              "errors": ["checksum mismatch"], "warnings": []}
+    drift.add_to_validation(report, tmp_path, tmp_path / "rig.json")
+    assert report["calibration_check"]["status"] == "not_evaluated"
+    assert report["errors"] == ["checksum mismatch"]
+    assert not report["capture_ready"] and not report["survey_ready"]
