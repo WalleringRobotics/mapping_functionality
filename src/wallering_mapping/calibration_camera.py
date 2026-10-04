@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 
 from . import bags
+from .dataset import sha256_file
 from .rig_calibration import CAMERA_SOCKETS, LEFT, OAK_IMU, factory_camera_links, xyzw_from_rotation
 
 SOCKETS = {"left": 1, "right": 2}
@@ -120,6 +121,8 @@ def excitation(rates):
 
 
 def require_excitation(rates, min_rate):
+    if len(rates) < 10:
+        raise ValueError("Camera and IMU recordings do not overlap")
     result = excitation(rates)
     if result["weakest_rate_rad_s"] < min_rate:
         raise ValueError(
@@ -373,6 +376,8 @@ def solve_tracks(frame_stamps_ns, pairs, k, dist, imu_stamps_ns, gyro, *, max_of
     # Refuse unexcited input from the gyro alone, before the costly image geometry.
     bias, _ = still_bias(imu, gyro)
     span = (imu >= frames[0]) & (imu <= frames[-1])
+    if span.sum() < 10:
+        raise ValueError("Camera and IMU recordings do not overlap")
     require_excitation(gyro[span] - (0 if bias is None else bias), options.get("min_rate", 0.15))
     camera, counts = camera_rotations(pairs, k, dist, pixel_threshold=pixel_threshold)
     result = solve_rotation_offset(frames[index[:, 0]], frames[index[:, 1]], camera, imu, gyro,
@@ -477,6 +482,12 @@ def solve_camera_imu(session: Path, *, camera="left", max_offset_ms=50.0, cross_
     session = Path(session)
     if camera not in SOCKETS:
         raise ValueError(f"camera must be one of {sorted(SOCKETS)}")
+    # Only a cleanly finished, sealed recording is evidence for a calibration entry.
+    state = session / "state"
+    if not state.is_file() or state.read_text().strip() != "complete":
+        raise ValueError("Recording did not finish cleanly (state is not complete)")
+    bags.check_seal(session)
+    seal_sha256 = sha256_file(session / "SHA256SUMS")
     files = sorted(session.glob("*_calibration.json"))
     if len(files) != 1:
         raise ValueError("Session must contain exactly one OAK *_calibration.json")
@@ -506,7 +517,8 @@ def solve_camera_imu(session: Path, *, camera="left", max_offset_ms=50.0, cross_
         check["camera"] = other
     offset_ns = int(round(primary["offset_s"] * 1e9))
     diagnostics = primary["diagnostics"]
-    evidence = (f"solve_camera_imu on {session.name} ({camera} camera, {files[0].name}): "
+    evidence = (f"solve_camera_imu on {session.name} (SHA256SUMS sha256 {seal_sha256}; "
+                f"{camera} camera, {files[0].name}): "
                 f"{diagnostics['pairs_used']} frame pairs, residual "
                 f"{math.degrees(diagnostics['residual_rms_rad']):.3f} deg RMS, weakest-axis rate "
                 f"{diagnostics['excitation']['weakest_rate_rad_s']:.2f} rad/s")
@@ -516,7 +528,7 @@ def solve_camera_imu(session: Path, *, camera="left", max_offset_ms=50.0, cross_
                      f" ({'consistent' if check['consistent_3_sigma'] else 'INCONSISTENT'} at 3 sigma)")
     entries = calibration_entries(rotation, primary["rotation_sigma_rad"], offset_ns,
                                   primary["offset_sigma_ns"], evidence, date)
-    return {"schema_version": 1, "session": str(session), "camera": camera,
+    return {"schema_version": 1, "session": str(session), "seal_sha256": seal_sha256, "camera": camera,
             "oak_device_id": files[0].name.removesuffix("_calibration.json"),
             "imu_frame_ids": imu_frames, "entries": entries,
             "rotation_matrix": rotation.tolist(), "offset_ns": offset_ns,

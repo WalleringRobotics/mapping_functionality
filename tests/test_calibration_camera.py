@@ -170,3 +170,26 @@ def test_tracks_rendered_images_and_refuses_textureless():
     blank = [(i * 50_000_000, np.full((240, 320), 128, np.uint8)) for i in range(6)]
     with pytest.raises(ValueError, match="Textureless"):
         cc.track_pairs(blank)
+
+
+def test_refuses_streams_that_do_not_overlap():
+    stamps, tracks, imu_ns, gyro = synthetic(seconds=8.0)
+    with pytest.raises(ValueError, match="do not overlap"):
+        cc.solve_tracks(stamps + 60 * 10**9, tracks["left"], K, DIST, imu_ns, gyro)
+
+
+def test_session_must_be_complete_and_sealed(tmp_path):
+    (tmp_path / "TESTDEVICE_calibration.json").write_text("{}")
+    with pytest.raises(ValueError, match="did not finish cleanly"):
+        cc.solve_camera_imu(tmp_path)
+    (tmp_path / "state").write_text("recording\n")
+    with pytest.raises(ValueError, match="did not finish cleanly"):
+        cc.solve_camera_imu(tmp_path)
+    (tmp_path / "state").write_text("complete\n")
+    with pytest.raises(ValueError, match="no SHA256SUMS seal"):
+        cc.solve_camera_imu(tmp_path)
+    (tmp_path / "bag").mkdir()
+    (tmp_path / "bag" / "metadata.yaml").write_text("original")
+    (tmp_path / "SHA256SUMS").write_text(f"{'0' * 64}  bag/metadata.yaml\n")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        cc.solve_camera_imu(tmp_path)
