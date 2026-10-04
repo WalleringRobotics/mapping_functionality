@@ -311,11 +311,14 @@ def check(calibration, session=None):
         offset = calibration.offsets.get(key)
         if offset is None or offset["sigma_ns"] is None:
             blocking.append(f"time offset {key[0]}->{key[1]}")
+    agreement = consistency(calibration)
+    if agreement is not None and agreement.get("consistent_3_sigma") is False:
+        blocking.append("Direct camera transform and IMU chain disagree beyond 3 sigma")
     return {"complete": not blocking, "blocking": blocking, "unset": unset,
             "unknown_uncertainty": unknown_sigma,
             "camera_path": None if left is None else (
                 "imu_chain" if calibration.imu_chain() is not None else "direct"),
-            "direct_vs_imu_chain": consistency(calibration),
+            "direct_vs_imu_chain": agreement,
             "sources": {f"{a}->{b}": t.sources[0] for (a, b), t in calibration.transforms.items()},
             "time_offsets": list(calibration.offsets.values()),
             "cameras": cameras, "session": session_report}

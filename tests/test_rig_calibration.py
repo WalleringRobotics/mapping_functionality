@@ -210,8 +210,28 @@ def test_imu_chain_takes_precedence_and_is_cross_checked():
     assert agreement["rotation_difference_rad"] < 1e-6
     assert agreement["translation_difference_m"] == pytest.approx(0.01)
     assert agreement["consistent_3_sigma"] is True
+    assert result["complete"] is True
     data["transforms"][2]["translation_m"] = [0.40, 0.0, 0.05]
-    assert check(RigCalibration(data))["direct_vs_imu_chain"]["consistent_3_sigma"] is False
+    rejected = check(RigCalibration(data))
+    assert rejected["direct_vs_imu_chain"]["consistent_3_sigma"] is False
+    assert rejected["complete"] is False
+    assert "Direct camera transform and IMU chain disagree beyond 3 sigma" in rejected["blocking"]
+
+
+def test_rotation_disagreement_blocks_require_complete(tmp_path, capsys):
+    data = filled()
+    direct = data["transforms"][2]
+    chain = RigCalibration(data).imu_chain()
+    direct.update(source="manual_measurement", rotation_rpy_deg=None,
+                  rotation_xyzw=xyzw_from_rotation(rotation_from_rpy_deg([0, 0, 45]) @ chain.rotation),
+                  translation_m=chain.translation.tolist(), rotation_sigma_rad=[0.01] * 3,
+                  translation_sigma_m=[0.005] * 3)
+    path = tmp_path / "rig.json"
+    path.write_text(json.dumps(data))
+    assert cli.main(["calibration-check", str(path), "--require-complete"]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["direct_vs_imu_chain"]["rotation_difference_rad"] == pytest.approx(np.pi / 4)
+    assert not result["complete"]
 
 
 def test_missing_time_offset_blocks_completeness():
