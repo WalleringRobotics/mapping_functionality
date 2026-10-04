@@ -75,6 +75,7 @@ jobs:
             '
   postprocessing-x86:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Set up the native x86-64 processing workstation
@@ -92,6 +93,28 @@ jobs:
             --mount "type=bind,src=$PWD,dst=$PWD,readonly" \
             --entrypoint /code/venv/bin/python3 opendronemap/odm:3.6.2 \
             "$PWD/deploy/check-odm-products.py"
+      - name: Run native ODM on pinned public aerial photographs
+        run: |
+          git init /tmp/wr-odm-example
+          git -C /tmp/wr-odm-example fetch --depth 1 \
+            https://github.com/pierotofy/drone_dataset_brighton_beach.git \
+            9506a9bf09c9678b7d0b80b014af5b606c8a7255
+          git -C /tmp/wr-odm-example checkout --detach FETCH_HEAD
+          mkdir -p runs/ci-odm/site
+          cp -a /tmp/wr-odm-example/images runs/ci-odm/site/images
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1 \
+            --mount "type=bind,src=$PWD/runs/ci-odm,dst=/datasets" \
+            opendronemap/odm:3.6.2 --project-path /datasets --max-concurrency 2 \
+            --feature-quality medium --pc-quality low --skip-3dmodel --skip-report \
+            --dsm --orthophoto-resolution 20 --dem-resolution 50 site \
+            > runs/ci-odm/engine.log 2>&1
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1 \
+            --mount "type=bind,src=$PWD/runs/ci-odm/site,dst=/site,readonly" \
+            --mount "type=bind,src=$PWD/src/wallering_mapping/odm_products.py,dst=/inspect.py,readonly" \
+            --entrypoint /code/venv/bin/python3 opendronemap/odm:3.6.2 \
+            /inspect.py /site > runs/ci-odm/product-validation.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -102,3 +125,6 @@ jobs:
             runs/ci-opensfm/**/quality.json
             runs/ci-opensfm/**/run.json
             runs/ci-opensfm/**/logs/*.log
+            runs/ci-odm/engine.log
+            runs/ci-odm/product-validation.json
+            runs/ci-odm/site/opensfm/reconstruction.json
