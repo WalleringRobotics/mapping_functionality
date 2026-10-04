@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "rig_id": null,
+  "hardware": {
+    "oak_device_id": null,
+    "oak_board": null,
+    "px4_board": null,
+    "gnss_receiver": null,
+    "notes": null
+  },
+  "conventions": {
+    "body_frame": "base_link: MAVROS body, FLU (x forward, y left, z up), origin at the PX4 body origin",
+    "camera_frames": "OAK optical frames: x right, y down, z forward",
+    "transform": "parent->child: p_parent = R p_child + t; t is the child origin in the parent frame",
+    "rotation_rpy_deg": "[roll, pitch, yaw] degrees, R = Rz(yaw) Ry(pitch) Rx(roll) about parent axes",
+    "uncertainty": "1-sigma; rotation in rad about parent axes, translation in metres along parent axes",
+    "time_offset": "add offset_ns to clock timestamps to express them on the reference clock"
+  },
+  "transforms": [
+    {
+      "parent": "base_link",
+      "child": "oak_imu_frame",
+      "source": "unset",
+      "rotation_rpy_deg": null,
+      "translation_m": null,
+      "rotation_sigma_rad": null,
+      "translation_sigma_m": null,
+      "evidence": null,
+      "date": null
+    },
+    {
+      "parent": "oak_imu_frame",
+      "child": "oak_left_camera_optical_frame",
+      "source": "unset",
+      "rotation_rpy_deg": null,
+      "translation_m": null,
+      "rotation_sigma_rad": null,
+      "translation_sigma_m": null,
+      "evidence": null,
+      "date": null
+    },
+    {
+      "parent": "base_link",
+      "child": "oak_left_camera_optical_frame",
+      "source": "unset",
+      "rotation_rpy_deg": null,
+      "translation_m": null,
+      "rotation_sigma_rad": null,
+      "translation_sigma_m": null,
+      "evidence": null,
+      "date": null
+    },
+    {
+      "parent": "base_link",
+      "child": "gnss_antenna_arp",
+      "source": "unset",
+      "rotation_rpy_deg": [0, 0, 0],
+      "translation_m": null,
+      "rotation_sigma_rad": [0, 0, 0],
+      "translation_sigma_m": null,
+      "evidence": null,
+      "date": null
+    }
+  ],
+  "time_offsets": [
+    {
+      "clock": "oak_ros_stamp",
+      "reference": "px4_ros_stamp",
+      "source": "unset",
+      "offset_ns": null,
+      "sigma_ns": null,
+      "evidence": null,
+      "date": null
+    },
+    {
+      "clock": "oak_camera_exposure",
+      "reference": "oak_imu",
+      "source": "unset",
+      "offset_ns": null,
+      "sigma_ns": null,
+      "evidence": null,
+      "date": null
+    }
+  ]
+}

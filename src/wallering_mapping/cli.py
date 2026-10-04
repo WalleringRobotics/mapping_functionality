@@ -111,6 +111,10 @@ def parser():
     georef.add_argument("--output", type=Path, required=True)
     georef.add_argument("--artifact", type=Path, action="append", default=[])
     georef.add_argument("--max-residual-m", type=positive, default=0.15)
+    rig = commands.add_parser("calibration-check", help="Validate a rig calibration file and compose camera/antenna transforms")
+    rig.add_argument("calibration", type=Path)
+    rig.add_argument("--session", type=Path, help="Recording whose OAK factory calibration to use and match")
+    rig.add_argument("--require-complete", action="store_true", help="Exit 2 while any link or uncertainty is unset")
     export = commands.add_parser("export", help="Export one camera for COLMAP or ODM")
     export.add_argument("session", type=Path)
     export.add_argument("--output", type=Path, required=True)
@@ -267,6 +271,11 @@ def main(argv=None):
             from .georeference import georeference
             result = georeference(args.project, args.model, args.image_accuracy, args.output,
                                   args.artifact, args.max_residual_m)
+        elif args.command == "calibration-check":
+            from .rig_calibration import RigCalibration, check
+            result = check(RigCalibration.read(args.calibration), args.session)
+            print(json.dumps(result, indent=2))
+            return 2 if args.require_complete and not result["complete"] else 0
         elif args.command == "export":
             from .export import export
             result = export(args.session, args.output, args.stream, args.interval,
