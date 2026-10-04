@@ -34,6 +34,7 @@ TRANSLATION_SIGMA_M = 0.03
 # Floors for effects the bootstrap cannot see (intrinsics error, IMU sampling/filtering).
 ROTATION_SIGMA_FLOOR_RAD = 5e-4
 OFFSET_SIGMA_FLOOR_NS = 100_000
+SOLVER = "camera-imu-hand-eye-v2"
 LIMITATIONS = ["Relative exposure-to-IMU offset only; absolute exposure timing needs an optical event (#14).",
                "Global-shutter mono cameras only; RGB rolling-shutter readout is not modelled.",
                "Factory intrinsics are trusted, not re-estimated.",
@@ -61,7 +62,12 @@ def log_so3(rotation):
                     m[..., 1, 0] - m[..., 0, 1]], axis=-1)
     sin = np.sin(angle)
     scale = np.where(angle < 1e-6, 0.5 + angle ** 2 / 12, angle / (2 * np.where(sin == 0, 1, sin)))
-    return vee * scale[..., None]
+    result = vee * scale[..., None]
+    # The skew part vanishes at pi; Rodrigues recovers the axis from the diagonal.
+    flat_m, flat_result = m.reshape(-1, 3, 3), result.reshape(-1, 3)
+    for index in np.flatnonzero(np.abs(angle.reshape(-1) - np.pi) < 1e-5):
+        flat_result[index] = cv2.Rodrigues(flat_m[index])[0].ravel()
+    return result
 
 
 def fit_rotation(source, target, weights=None):
@@ -251,14 +257,27 @@ def scan(path, start, end, camera, offsets, weights):
 
 
 def solve_rotation_offset(start_s, end_s, camera, imu_s, gyro, *, max_offset_s=0.05,
-                          min_pairs=100, min_rate=0.15, bootstrap=200, block=20, seed=0):
+                          min_pairs=100, min_rate=0.15, bootstrap=200, block=20, seed=0,
+                          max_gap_s=0.05, max_residual_rad=0.02):
     """Hand-eye rotation IMU->camera and camera->IMU clock offset from frame-pair rotations.
 
     ``start_s``/``end_s`` are camera stamps of each pair, ``camera`` the camera rotation
     vectors (NaN = rejected), ``imu_s``/``gyro`` raw IMU stamps and rates, all on one
     time origin in seconds.
     """
+    if not all(math.isfinite(v) and v > 0 for v in
+               (max_offset_s, min_rate, max_gap_s, max_residual_rad)) or max_offset_s < 0.002:
+        raise ValueError("Solver limits must be positive and finite; max_offset_s must be at least 0.002")
+    if min_pairs < 10 or bootstrap < 2 or block < 1:
+        raise ValueError("Require at least 10 pairs, two bootstrap samples and a positive block size")
+    start_s, end_s, camera = np.asarray(start_s, float), np.asarray(end_s, float), np.asarray(camera, float)
+    if start_s.ndim != 1 or end_s.shape != start_s.shape or camera.shape != (len(start_s), 3):
+        raise ValueError("Frame pair arrays must have matching shapes")
+    if not np.isfinite(start_s).all() or not np.isfinite(end_s).all() or np.any(end_s <= start_s):
+        raise ValueError("Frame intervals must be finite and increasing")
     imu_s, gyro = np.asarray(imu_s, float), np.asarray(gyro, float)
+    if gyro.shape != (len(imu_s), 3) or not np.isfinite(gyro).all() or not np.isfinite(imu_s).all():
+        raise ValueError("IMU stamps and matching Nx3 gyro rates must be finite")
     if len(imu_s) < 10 or np.any(np.diff(imu_s) <= 0):
         raise ValueError("IMU stamps must be increasing with at least 10 samples")
     initial_bias, still_s = still_bias(imu_s, gyro)
@@ -270,7 +289,13 @@ def solve_rotation_offset(start_s, end_s, camera, imu_s, gyro, *, max_offset_s=0
     if span.sum() < 10:
         raise ValueError("Camera and IMU recordings do not overlap")
     require_excitation(gyro[span] - bias, min_rate)
-    valid = inside & np.isfinite(camera).all(axis=1)
+    # Reject any pair whose integration interval could cross a sample gap, including
+    # the whole offset scan. Never invent rotations through missing IMU samples.
+    gap_prefix = np.r_[0, np.cumsum(np.diff(imu_s) > max_gap_s)]
+    first = np.clip(np.searchsorted(imu_s, start_s - max_offset_s, side="right") - 1, 0, len(imu_s) - 1)
+    last = np.clip(np.searchsorted(imu_s, end_s + max_offset_s), 0, len(imu_s) - 1)
+    gap_free = gap_prefix[last] == gap_prefix[first]
+    valid = inside & gap_free & np.isfinite(camera).all(axis=1)
     if valid.sum() < min_pairs:
         raise ValueError(f"Too few tracked frame pairs: {int(valid.sum())} < {min_pairs}; "
                          "record longer, at a higher frame rate, or with more texture")
@@ -301,13 +326,24 @@ def solve_rotation_offset(start_s, end_s, camera, imu_s, gyro, *, max_offset_s=0
     if abs(coarse[best]) >= max_offset_s - step / 2:
         raise ValueError(f"Time offset at the scan limit ({coarse[best] * 1e3:.0f} ms); "
                          "increase max_offset_ms or check the clocks")
-    fine = coarse[best] + np.arange(-3e-3, 3e-3 + 5e-5, 1e-4)
+    fine = np.arange(max(-max_offset_s, coarse[best] - 3e-3),
+                     min(max_offset_s, coarse[best] + 3e-3) + 5e-5, 1e-4)
     fine_imu, _, fine_residual = scan(path, start, end, cam, fine, weights)
-    offset = parabola_minimum(fine, (weights * fine_residual ** 2).sum(1))
+    fine_cost = (weights * fine_residual ** 2).sum(1)
+    if np.argmin(fine_cost) in (0, len(fine) - 1):
+        raise ValueError("Time offset at the scan limit; increase max_offset_ms or check the clocks")
+    offset = parabola_minimum(fine, fine_cost)
     final_imu = path.relative(start + offset, end + offset)
     rotation, _ = fit_rotation(cam, final_imu, weights)
     final_residual = np.linalg.norm(final_imu - cam @ rotation.T, axis=1)
     used = weights > 0
+    if used.sum() < min_pairs:
+        raise ValueError(f"Too few tracked frame pairs after residual rejection: {int(used.sum())} < {min_pairs}")
+    require_excitation(final_imu[used] / (end - start)[used, None], min_rate)
+    require_excitation(cam[used] / (end - start)[used, None], min_rate)
+    residual_rms = float(np.sqrt(np.mean(final_residual[used] ** 2)))
+    if residual_rms > max_residual_rad:
+        raise ValueError(f"Camera/gyro residual {residual_rms:.4f} rad exceeds {max_residual_rad} rad")
 
     # Moving-block bootstrap over the used pairs (in time order), re-solving on the fine grid.
     rng = np.random.default_rng(seed)
@@ -343,11 +379,12 @@ def solve_rotation_offset(start_s, end_s, camera, imu_s, gyro, *, max_offset_s=0
                 "pairs_valid": int(valid.sum()), "pairs_used": int(used.sum()),
                 "pairs_rejected_residual": int((~used).sum()),
                 "pairs_outside_imu": int((~inside).sum()),
+                "pairs_crossing_imu_gaps": int((inside & ~gap_free).sum()),
                 "gyro_bias_rad_s": bias.tolist(),
                 "gyro_bias_still_rad_s": None if initial_bias is None else initial_bias.tolist(),
                 "still_duration_s": still_s,
                 "excitation": excitation(rates),
-                "residual_rms_rad": float(np.sqrt(np.mean(final_residual[used] ** 2))),
+                "residual_rms_rad": residual_rms,
                 "residual_rms_at_zero_offset_rad": float(np.sqrt(
                     (weights * np.linalg.norm(path.relative(start, end) - cam @ rotation.T, axis=1) ** 2).sum()
                     / weights.sum())),
@@ -369,6 +406,10 @@ def solve_tracks(frame_stamps_ns, pairs, k, dist, imu_stamps_ns, gyro, *, max_of
     index = np.array([(i, j) for i, j, _, _ in pairs], np.int64).reshape(-1, 2)
     if len(index) and (index.min() < 0 or index.max() >= len(frame_stamps_ns) or (index[:, 1] <= index[:, 0]).any()):
         raise ValueError("Pairs must reference frames i < j")
+    if len(imu_stamps_ns) < 10 or np.any(np.diff(imu_stamps_ns) <= 0):
+        raise ValueError("IMU stamps must be increasing with at least 10 samples")
+    if np.asarray(gyro).shape != (len(imu_stamps_ns), 3) or not np.isfinite(gyro).all():
+        raise ValueError("IMU gyro rates must be finite matching Nx3 samples")
     origin = int(imu_stamps_ns[0])
     frames = (frame_stamps_ns - origin) / 1e9
     imu = (imu_stamps_ns - origin) / 1e9
@@ -434,10 +475,14 @@ def read_gyro(bag):
         stamps.append(bags.stamp(message))
         rates.append([message.angular_velocity.x, message.angular_velocity.y, message.angular_velocity.z])
         frames.add(message.header.frame_id)
-    order = np.argsort(stamps, kind="stable")
-    stamps, rates = np.asarray(stamps, np.int64)[order], np.asarray(rates, float)[order]
-    keep = np.concatenate([[True], np.diff(stamps) > 0])
-    return stamps[keep], rates[keep], sorted(frames)
+    if frames != {OAK_IMU}:
+        raise ValueError(f"{bags.IMU} frames {sorted(frames)!r}, expected only {OAK_IMU!r}")
+    stamps, rates = np.asarray(stamps, np.int64), np.asarray(rates, float)
+    if len(stamps) < 10 or np.any(np.diff(stamps) <= 0):
+        raise ValueError("IMU stamps must be increasing with at least 10 samples")
+    if not np.isfinite(rates).all():
+        raise ValueError("IMU gyro rates must be finite")
+    return stamps, rates, sorted(frames)
 
 
 def solve_session_camera(bag, oak, camera, imu_stamps, gyro, *, min_fps, max_offset_ms, stride, **options):
@@ -457,7 +502,11 @@ def solve_session_camera(bag, oak, camera, imu_stamps, gyro, *, min_fps, max_off
             image = bags.image_array(message)
             if image.ndim != 2:
                 raise ValueError(f"{topic} must be mono8 for camera-IMU calibration")
-            geometry.setdefault("shape", image.shape)
+            expected_frame = CAMERA_SOCKETS[SOCKETS[camera]]
+            if message.header.frame_id != expected_frame:
+                raise ValueError(f"{topic} must use {expected_frame}, got {message.header.frame_id!r}")
+            if geometry.setdefault("shape", image.shape) != image.shape:
+                raise ValueError(f"Image geometry changed on {topic}")
             yield bags.stamp(message), image
 
     stamps, pairs, tracking = track_pairs(frames(), stride=stride)
@@ -476,8 +525,8 @@ def solve_camera_imu(session: Path, *, camera="left", max_offset_ms=50.0, cross_
 
     ``camera`` selects the primary stream; a right-camera result is mapped to the left
     optical frame through the OAK factory extrinsics. The other mono camera is solved
-    independently as a cross-check when ``cross_check_camera`` is set; its refusal is
-    reported, not raised. ``stride`` is the frame separation of each tracked pair.
+    independently as a cross-check when ``cross_check_camera`` is set; its refusal or
+    disagreement prevents calibrated entries. Disabling it returns diagnostics only. ``stride`` is the frame separation of each tracked pair.
     """
     session = Path(session)
     if camera not in SOCKETS:
@@ -486,11 +535,13 @@ def solve_camera_imu(session: Path, *, camera="left", max_offset_ms=50.0, cross_
     state = session / "state"
     if not state.is_file() or state.read_text().strip() != "complete":
         raise ValueError("Recording did not finish cleanly (state is not complete)")
-    bags.check_seal(session)
+    sealed = bags.check_seal(session)
     seal_sha256 = sha256_file(session / "SHA256SUMS")
     files = sorted(session.glob("*_calibration.json"))
     if len(files) != 1:
         raise ValueError("Session must contain exactly one OAK *_calibration.json")
+    if files[0].name not in sealed:
+        raise ValueError("Recording seal omits the OAK factory calibration")
     oak = json.loads(files[0].read_text())
     # factory[...] is left -> camera: p_left = R p_camera, so p_camera = R^T p_left.
     factory = factory_camera_links(oak)
@@ -510,14 +561,18 @@ def solve_camera_imu(session: Path, *, camera="left", max_offset_ms=50.0, cross_
             try:
                 secondary = solve_session_camera(bag, oak, other, imu_stamps, gyro, **options)
             except ValueError as error:
-                check = {"camera": other, "error": str(error)}
+                raise ValueError(f"{other} camera cross-check refused: {error}") from error
     rotation = primary["rotation"] @ to_left[camera]
     if secondary is not None:
         check = cross_check(primary, secondary, to_left[other] @ to_left[camera].T)
         check["camera"] = other
+        if not check["consistent_3_sigma"]:
+            raise ValueError(f"{other} camera cross-check disagrees beyond 3 sigma: "
+                             f"{check['rotation_difference_rad']:.4f} rad, "
+                             f"{check['offset_difference_ns'] / 1e6:.3f} ms")
     offset_ns = int(round(primary["offset_s"] * 1e9))
     diagnostics = primary["diagnostics"]
-    evidence = (f"solve_camera_imu on {session.name} (SHA256SUMS sha256 {seal_sha256}; "
+    evidence = (f"{SOLVER} on {session.name} (SHA256SUMS sha256 {seal_sha256}; "
                 f"{camera} camera, {files[0].name}): "
                 f"{diagnostics['pairs_used']} frame pairs, residual "
                 f"{math.degrees(diagnostics['residual_rms_rad']):.3f} deg RMS, weakest-axis rate "
@@ -527,8 +582,8 @@ def solve_camera_imu(session: Path, *, camera="left", max_offset_ms=50.0, cross_
                      f" and {check['offset_difference_ns'] / 1e6:.2f} ms"
                      f" ({'consistent' if check['consistent_3_sigma'] else 'INCONSISTENT'} at 3 sigma)")
     entries = calibration_entries(rotation, primary["rotation_sigma_rad"], offset_ns,
-                                  primary["offset_sigma_ns"], evidence, date)
-    return {"schema_version": 1, "session": str(session), "seal_sha256": seal_sha256, "camera": camera,
+                                  primary["offset_sigma_ns"], evidence, date) if check is not None else []
+    return {"schema_version": 1, "qualified": check is not None, "solver": SOLVER, "session": str(session), "seal_sha256": seal_sha256, "camera": camera,
             "oak_device_id": files[0].name.removesuffix("_calibration.json"),
             "imu_frame_ids": imu_frames, "entries": entries,
             "rotation_matrix": rotation.tolist(), "offset_ns": offset_ns,
