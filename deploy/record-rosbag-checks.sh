@@ -14,6 +14,11 @@ if [[ "$bag_camera_only" == false ]]; then
   timeout 30 ros2 topic echo /mavros/state mavros_msgs/msg/State --once --filter 'm.connected' > "$bag_output/mavros-state.yaml"
   grep -q 'connected: true' "$bag_output/mavros-state.yaml" || { echo "PX4 is not connected" >&2; exit 2; }
   timeout 15 ros2 param dump /mavros/time > "$bag_output/mavros-time.yaml"
+  # Record the mission PX4 holds for a checked survey plan (read-only download).
+  if [[ -f "$bag_output/survey.plan" ]]; then
+    python3 "$bag_output/recording.py" --pull-mission --report "$bag_output/mission-pull.json" ||
+      echo "Mission download failed; survey legs will stay unverified" >&2
+  fi
   if [[ "$bag_px4_rate" != 0 ]]; then
     python3 "$bag_output/recording.py" --rate "$bag_px4_rate" --report "$bag_output/px4-rate-request.json"
   fi

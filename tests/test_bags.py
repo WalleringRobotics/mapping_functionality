@@ -27,7 +27,7 @@ def seal(root):
 
 
 def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=False, imu_drop=(),
-                imu_repeat=(), mono_fps=2, px4_burst=False):
+                imu_repeat=(), mono_fps=2, px4_burst=False, extra=None):
     root.mkdir()
     # The fixture IMU publishes at 100 Hz on gyro times, whatever the default profile.
     yaml = YAML()
@@ -91,6 +91,8 @@ def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=Fa
                     t['geometry_msgs/msg/Vector3'](0.,0.,0.), zero,
                     t['geometry_msgs/msg/Vector3'](0.,0.,9.81), zero)
                 writer.write(conns['/mavros/imu/data'], ns, store.serialize_cdr(msg, msg.__msgtype__))
+        if extra:
+            extra(writer, store, header)
     seal(root)
     return root
 

@@ -457,14 +457,26 @@ def audit_bag(root):
     return report
 
 
-def import_bag(root, output):
-    """Produce a derived image dataset for existing offline engines, retaining the MCAP source."""
+def import_bag(root, output, survey_legs=None):
+    """Produce a derived image dataset for existing offline engines, retaining the MCAP source.
+
+    With ``survey_legs``, only frames whose ROS header time lies inside a qualified
+    survey leg are imported; bag ordinals still number every source frame.
+    """
     root, output = Path(root).resolve(), Path(output).resolve()
     if output.is_relative_to(root) or root.is_relative_to(output):
         raise ValueError("Import output must be separate from the immutable recording")
     audit = audit_bag(root)
     if not audit["valid"]:
         raise ValueError(f"Bag failed validation: {audit['errors']}")
+    windows = selection = None
+    if survey_legs is not None:
+        from .survey_flight import leg_windows
+        windows, legs = leg_windows(survey_legs, sha256_file(root / "SHA256SUMS"))
+        selection = {"survey_legs_sha256": sha256_file(survey_legs), "plan_sha256": legs["plan_sha256"],
+                     "legs_used": len(windows), "imported": Counter(), "skipped": Counter(),
+                     "meaning": "Frames whose ROS header time lies between the PX4 reached events of a "
+                                "qualified leg's entry and exit; boundaries are approximate"}
     parameters = requested_parameters(root)
     rgb = parameters["rgb"]
     config = CaptureConfig(fps=rgb["i_fps"], rgb_format="png", imu="off",
@@ -486,6 +498,8 @@ def import_bag(root, output):
         "received_utc_ns": "rosbag2 receipt timestamp",
         "sequence": "Per-stream bag ordinal, NOT hardware sequence; source losses unobservable",
         "settings": "Requested driver parameters, NOT per-frame hardware settings readback"}
+    if selection is not None:
+        session.manifest["survey_selection"] = selection
     status, reason = "complete", "offline MCAP import"
     try:
         with reader(root) as bag:
@@ -495,6 +509,11 @@ def import_bag(root, output):
                 stream = next(name for name, topic in CAMERAS.items() if topic == connection.topic)
                 message = bag.deserialize(raw, connection.msgtype)
                 ordinals[stream] += 1
+                if windows is not None:
+                    inside = any(start <= stamp(message) <= end for start, end in windows)
+                    selection["imported" if inside else "skipped"][stream] += 1
+                    if not inside:
+                        continue
                 setting = parameters[stream]
                 camera = calibration["cameras"][connection.topic.replace("image_raw", "camera_info")]
                 metadata = {"sequence": ordinals[stream], "sequence_origin": "bag_ordinal",

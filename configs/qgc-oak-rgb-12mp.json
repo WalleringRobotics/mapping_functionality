@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "name": "OAK-D RGB IMX378 12MP",
+  "stream": "rgb",
+  "profile_resolution": "12MP",
+  "qgc_custom_camera": {
+    "SensorWidth": 6.29,
+    "SensorHeight": 4.71,
+    "ImageWidth": 4056,
+    "ImageHeight": 3040,
+    "FocalLength": 4.8,
+    "Landscape": true,
+    "FixedOrientation": true,
+    "MinTriggerInterval": 0.5
+  },
+  "derivation": {
+    "focal_length_px": 3093.2,
+    "pixel_pitch_um": 1.55,
+    "exact_sensor_mm": [6.2868, 4.712],
+    "exact_focal_length_mm": 4.7945,
+    "rounding": "QGroundControl stores sensor size to 0.01 mm and focal length to 0.1 mm; the rounded ratio changes GSD by 0.06 %",
+    "sources": [
+      "DepthAI-derived 12 MP intrinsics from the factory 1920x1080 calibration (docs/oak-d-hardware.md)",
+      "Sony IMX378 1.55 um pixel pitch"
+    ]
+  },
+  "mounting": "Landscape means the image width lies across the flight track. PX4 must yaw along each leg (MIS_YAWMODE 0) and the OAK must be mounted nadir with its image width across the vehicle.",
+  "limitations": [
+    "The 12 MP intrinsics are derived from a 1080p calibration, not measured at 12 MP (#14)",
+    "RGB is rolling shutter; readout time is unmeasured"
+  ]
+}
