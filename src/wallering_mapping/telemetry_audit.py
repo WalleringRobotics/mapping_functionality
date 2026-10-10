@@ -108,6 +108,7 @@ def audit_telemetry(root, manifest):
                                if not counts["telemetry_" + role]},
             "gnss_valid_fix_samples": valid_fixes,
             "timing": {"samples": len(rtts), "qualified_samples": qualified_samples,
+                       "gate_diagnostics": monitor.diagnostics(),
                        "max_consecutive_good": max_good, "required_consecutive_good": monitor.minimum,
                        "round_trip_time_ms": summary_statistics(rtts),
                        "offset_residual_ms": summary_statistics(residuals),

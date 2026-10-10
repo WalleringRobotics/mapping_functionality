@@ -47,16 +47,19 @@ def export(root, output, stream="rgb", interval=1.0, min_sharpness=0.0, allow_ga
         raise ValueError("Camera geometry/focus changed; split into calibration groups before export")
     output.mkdir(parents=True, exist_ok=False)
     (output / "images").mkdir()
+    source_manifest = json.loads((root / "manifest.json").read_text())
     metadata = {
         "schema_version": 1, "status": "building", "stream": stream,
         "source_manifest_sha256": sha256_file(root / "manifest.json"),
         "source_calibration_sha256": sha256_file(root / "calibration.json"),
-        "source_type": json.loads((root / "manifest.json").read_text())["source"],
+        "source_type": source_manifest["source"],
         "camera": {**camera, "width": first["width"], "height": first["height"]},
         "selection": {"interval_seconds": interval, "min_sharpness": min_sharpness,
                       "allow_gaps": allow_gaps},
         "coordinate_frame": "unscaled monocular reconstruction; no CRS or metric scale",
     }
+    if "survey_selection" in source_manifest:
+        metadata["survey_selection"] = source_manifest["survey_selection"]
     write_json(output / "project.json", metadata)
     write_json(output / "validation.json", report)
     selected, last = [], None

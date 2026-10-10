@@ -1,0 +1,150 @@
+{
+  "schema": "wallering.uav-mapping-handoff/v1",
+  "schema_version": 1,
+  "status": "design_proposal",
+  "platform": "survey_wing",
+  "survey_ready": false,
+  "consumer": {
+    "repository": "WalleringRobotics/mapping_functionality",
+    "inspected_main_revision": "51a3d3237cd6033146b8d0d472d4ff15c1c68dc6",
+    "inspected_survey_branch_revision": "ab05b427e1ed650af858349e01c8294861af4016",
+    "inspected_processing_branch_revision": "b8e48cc1f0ee1b4e5c22afcfe68afd74e17dcb36",
+    "inspected_plan_branch_revision": "5f8f55b59cb0b61b3ca7cee46c83f32443c36632",
+    "reviewed_on": "2026-10-10"
+  },
+  "source_files": {
+    "integration/mapping_profile.yaml": "49bf123970536c7529d11ee050e59510e7c80616c90dc390d2571a8779aea1b6",
+    "platforms/survey_wing/design_point.yaml": "25516c42f9339c087ee37991d5dce5f032f2d15d194f588781efa43428db33b7",
+    "platforms/survey_wing/electronics.yaml": "11dc97c01e3e0ba6cb204f2c2d052f8410d52ba9912ca66e3c39d366dad76918",
+    "payload/survey_cage.yaml": "e66ca2a4cce2123e9d85c92b6ea6c641adbc7b26800981132a66ea04b77e93aa",
+    "mission/mission_params.yaml": "387e3722d0341082e4a6c2dbe912b7ae9e0ac52626856f9b7b839fe65006c85f"
+  },
+  "hardware": {
+    "camera": {
+      "part": "Basler ace 2 R GigE PRO, IMX542 colour (a2A5320-7gcPRO), preferred candidate",
+      "geometry": {
+        "source": "https://www.baslerweb.com/en/shop/a2a5320-7gcpro/",
+        "pixels_across": 5320,
+        "pixels_along": 3032,
+        "pixel_um": 2.74,
+        "focal_mm": 25.0,
+        "max_fps": 7.0
+      },
+      "selection_policy": {
+        "selection": "preferred_candidate",
+        "substitute_allowed": true,
+        "alternatives_require": [
+          "global_shutter_or_measured_readout",
+          "calibrated_intrinsics",
+          "exposure_event_evidence",
+          "bandwidth_qualification",
+          "updated_mass_and_balance"
+        ],
+        "existing_oak_platform": "preserve_unchanged"
+      },
+      "calibration_state": "nominal_design_only",
+      "confirm": "Confirm availability, trigger/ExposureActive electrical levels and connector clearance. Basler preferred, alternatives allowed. Previous a2A5328-4gcPRO was an IMX540 SKU mismatch."
+    },
+    "lens": "Kowa LM25FC24M 25 mm f/1.8 1.1in C-mount",
+    "flight_controller": "ARK FPV Flight Controller (STM32H743, IIM-42653, BMP390)",
+    "flight_gnss": "ARK TESEO GPS (ST TESEO LIV4F L1/L5, IIS2MDC compass, BMP390)",
+    "survey_receiver": "ArduSimple simpleRTK2B (u-blox ZED-F9P)",
+    "compute_variants": {
+      "orin": {
+        "part": "Orin Nano Super + Connect Tech Hadron-DM (NGX024) + heatsink/fan",
+        "role": "capture_and_optional_preview",
+        "preview_qualified": false
+      },
+      "cm5": {
+        "part": "Raspberry Pi CM5 + compact GbE/NVMe carrier + heatsink",
+        "role": "capture_only",
+        "preview_qualified": false
+      }
+    },
+    "camera_and_antenna_on_same_rigid_cage": true
+  },
+  "mission": {
+    "acquisition_rate_cap_hz": 4.0,
+    "agl_m": 100,
+    "forward_overlap": 0.8,
+    "side_overlap": 0.7,
+    "exposure_s": 0.0004,
+    "blur_limit_px": 0.6,
+    "turn_efficiency": 0.8,
+    "climb_height_m": 120,
+    "hot_day_isa_offset_c": 15,
+    "site_boundary": null,
+    "home_position": null,
+    "max_ground_speed_m_s": 16.44,
+    "survey_duration_s": 3000,
+    "horizontal_checkpoint_rmse_target_m": null,
+    "vertical_checkpoint_rmse_target_m": null,
+    "operator_review": "pending",
+    "duration_basis": "requested integration window; does not establish achieved aircraft endurance",
+    "speed_basis": "explicit profile ground speed or nominal camera/blur upper bound; not commanded airspeed"
+  },
+  "capture": {
+    "adapter": "basler_gige_proposed",
+    "requested_fps": 4.0,
+    "pixel_format": "Bayer8_candidate",
+    "bytes_per_pixel": 1,
+    "link_bits_per_s": 1000000000,
+    "link_utilisation_limit": 0.8,
+    "warmup_s": 60,
+    "postroll_s": 2,
+    "capacity_margin_fraction": 0.3,
+    "free_space_reserve_bytes": 5368709120,
+    "available_storage_bytes": null,
+    "sustained_write_bytes_per_s": null
+  },
+  "navigation": {
+    "autopilot_family": "ArduPilot",
+    "vehicle_type": "fixed_wing",
+    "firmware_version": null,
+    "flight_gnss_independent": true,
+    "survey_receiver": "ZED-F9P",
+    "raw_messages_required": [
+      "UBX-RXM-RAWX",
+      "UBX-RXM-SFRBX",
+      "UBX-TIM-TM2"
+    ],
+    "exposure_event_input": "ExposureActive_to_F9P_EXTINT_proposed",
+    "event_polarity": null,
+    "event_delay_ns": null,
+    "event_sigma_ns": null,
+    "reference_station": null,
+    "horizontal_crs": null,
+    "vertical_datum": null
+  },
+  "geometry": {
+    "gsd_m_per_px": 0.010960000000000001,
+    "across_track_footprint_m": 58.30720000000001,
+    "along_track_footprint_m": 33.230720000000005,
+    "line_spacing_m": 17.492160000000005,
+    "trigger_spacing_m": 6.646144,
+    "required_trigger_hz": 2.473614775725594,
+    "forward_motion_blur_px": 0.6000000000000001,
+    "frame_rate_pass": true,
+    "blur_pass": true,
+    "basis": "Nadir flat-ground pinhole estimate at stated AGL; nominal lens, no terrain/attitude/wind/turn allowance. GSD is not accuracy."
+  },
+  "resources": {
+    "budget_rate_hz": 4.0,
+    "raw_bytes_per_frame": 16130240,
+    "raw_bytes_per_s": 64520960.0,
+    "capture_window_with_preroll_s": 3062,
+    "minimum_sustained_write_bytes_per_s": 83877248.0,
+    "minimum_free_storage_bytes": 262200842496,
+    "minimum_free_storage_gib": 244.1935636997223,
+    "link_payload_budget_bytes_per_s": 100000000.0,
+    "link_budget_pass": true,
+    "storage_capacity_pass": null,
+    "storage_throughput_pass": null,
+    "basis": "Full configured camera rate; uncompressed selected pixel format; capacity margin includes unmodelled telemetry/container overhead. Verify on hardware."
+  },
+  "compatibility": {
+    "capture_supported_on_inspected_main": false,
+    "survey_plan_supported_on_inspected_branch": false,
+    "existing_offline_engines_reusable_after_validated_import": true
+  }
+}

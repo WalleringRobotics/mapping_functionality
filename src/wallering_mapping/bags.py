@@ -169,6 +169,8 @@ def sample_loss(stamps, start, end, rate_hz=None, values=None):
                       missing_samples=result["missing_in_gaps"])
     if result["expected_samples"]:
         result["loss_percent"] = 100 * result["missing_samples"] / result["expected_samples"]
+    result["gap_estimate_exceeds_nominal_deficit"] = (
+        result["missing_in_gaps"] > result["missing_samples"] if rate_hz else None)
     if values is not None:
         selected = np.asarray(values, dtype=float)[inside]
         result["repeated_samples"] = (int(np.all(selected[1:] == selected[:-1], axis=1).sum())
@@ -403,10 +405,10 @@ def audit_bag(root):
                 expected = (f"{loss['expected_samples']} expected at {loss['requested_hz']} Hz"
                             if loss["requested_hz"] else "rate unrequested")
                 report["warnings"].append(
-                    f"IMU sample loss estimate in acquisition window: {topic} {loss['samples']} samples, "
-                    f"{expected} ({loss['loss_percent']:.2f}% missing), {loss['gaps']} gaps "
-                    f"(max {loss['max_gap_ms'] or 0:.0f} ms, {loss['missing_in_gaps']} samples), "
-                    f"{loss['repeated_samples']} repeated")
+                    f"IMU continuity diagnostics in acquisition window: {topic} {loss['samples']} samples, "
+                    f"{expected} ({loss['loss_percent']:.2f}% count deficit), {loss['gaps']} interval gaps "
+                    f"(max {loss['max_gap_ms'] or 0:.0f} ms, {loss['missing_in_gaps']} inferred samples), "
+                    f"{loss['repeated_samples']} repeated; hardware loss unknown")
         if report["kind"] == "calibration":
             from .recording import CALIBRATION_PHASES
             phases = json.loads((root / "calibration-phases.json").read_text())
@@ -429,6 +431,7 @@ def audit_bag(root):
                     q["qualification"] == "qualified" for q in qualities),
                 "maximum_good_streak": max(q["consecutive_good"] for q in qualities),
                 "required_good": monitor.minimum,
+                "gate_diagnostics": monitor.diagnostics(),
                 "rtt_ms": distribution([row["round_trip_time_ms"] for row in sync_rows]),
                 "offset_residual_ms": distribution([q["offset_residual_ns"] / 1e6 for q in qualities])}
             if not report["timesync"]["qualified_samples"]:
@@ -457,14 +460,27 @@ def audit_bag(root):
     return report
 
 
-def import_bag(root, output):
-    """Produce a derived image dataset for existing offline engines, retaining the MCAP source."""
+def import_bag(root, output, survey_legs=None):
+    """Produce a derived image dataset for existing offline engines, retaining the MCAP source.
+
+    With ``survey_legs``, only frames whose ROS header time lies inside a qualified
+    survey leg are imported; bag ordinals still number every source frame.
+    """
     root, output = Path(root).resolve(), Path(output).resolve()
     if output.is_relative_to(root) or root.is_relative_to(output):
         raise ValueError("Import output must be separate from the immutable recording")
     audit = audit_bag(root)
     if not audit["valid"]:
         raise ValueError(f"Bag failed validation: {audit['errors']}")
+    windows = selection = None
+    if survey_legs is not None:
+        from .survey_flight import leg_windows
+        windows, legs = leg_windows(survey_legs, sha256_file(root / "SHA256SUMS"))
+        selection = {"survey_legs_sha256": sha256_file(survey_legs), "plan_sha256": legs["plan_sha256"],
+                     "profile_hashes": legs.get("profile_hashes", {}),
+                     "legs_used": len(windows), "imported": Counter(), "skipped": Counter(),
+                     "meaning": "Frames whose ROS header time lies between the PX4 reached events of a "
+                                "qualified leg's entry and exit; boundaries are approximate"}
     parameters = requested_parameters(root)
     rgb = parameters["rgb"]
     config = CaptureConfig(fps=rgb["i_fps"], rgb_format="png", imu="off",
@@ -486,6 +502,8 @@ def import_bag(root, output):
         "received_utc_ns": "rosbag2 receipt timestamp",
         "sequence": "Per-stream bag ordinal, NOT hardware sequence; source losses unobservable",
         "settings": "Requested driver parameters, NOT per-frame hardware settings readback"}
+    if selection is not None:
+        session.manifest["survey_selection"] = selection
     status, reason = "complete", "offline MCAP import"
     try:
         with reader(root) as bag:
@@ -495,6 +513,11 @@ def import_bag(root, output):
                 stream = next(name for name, topic in CAMERAS.items() if topic == connection.topic)
                 message = bag.deserialize(raw, connection.msgtype)
                 ordinals[stream] += 1
+                if windows is not None:
+                    inside = any(start <= stamp(message) <= end for start, end in windows)
+                    selection["imported" if inside else "skipped"][stream] += 1
+                    if not inside:
+                        continue
                 setting = parameters[stream]
                 camera = calibration["cameras"][connection.topic.replace("image_raw", "camera_info")]
                 metadata = {"sequence": ordinals[stream], "sequence_origin": "bag_ordinal",

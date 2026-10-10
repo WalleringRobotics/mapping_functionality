@@ -1,0 +1,10 @@
+mapping_handoff.json was generated on 2026-10-10 using uavdesign.integration
+from WalleringRobotics/UAV_Design_Environment, codex/artifact-delivery,
+revision c6b403c55170098037189024d5238f69bd62a685.
+https://github.com/WalleringRobotics/UAV_Design_Environment/tree/c6b403c55170098037189024d5238f69bd62a685
+
+The generator and source inputs were retrieved unchanged; their SHA-256 values
+are retained in source_files. No design_analysis was supplied. This is a design
+proposal, not a real recording, measured calibration, or achieved endurance.
+The Plane missions and aircraft limits constructed in test_survey_plane.py are
+synthetic fixtures, not plans saved by QGroundControl or Mission Planner.

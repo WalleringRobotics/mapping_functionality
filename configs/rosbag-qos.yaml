@@ -13,3 +13,5 @@
 /mavros/time_reference: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
 /uas1/mavlink_source: {history: keep_last, depth: 5000, reliability: best_effort, durability: volatile}
 /mavros/mission/reached: {history: keep_last, depth: 1000, reliability: best_effort, durability: volatile}
+# MAVROS publishes the vehicle mission latched; subscribe transient-local to keep the last list.
+/mavros/mission/waypoints: {history: keep_last, depth: 10, reliability: reliable, durability: transient_local}

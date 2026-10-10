@@ -73,7 +73,8 @@ def process(session, output, config, execute=False, prepare_only=False, resume=F
     audit = validate(session)
     if not audit["valid"]:
         raise ValueError(f"Dataset failed validation: {audit['errors']}")
-    source = json.loads((session / "manifest.json").read_text())["source"]
+    source_manifest = json.loads((session / "manifest.json").read_text())
+    source = source_manifest["source"]
     if execute and prepare_only:
         raise ValueError("Choose execute or prepare-only")
     if execute and source == "synthetic":
@@ -87,6 +88,8 @@ def process(session, output, config, execute=False, prepare_only=False, resume=F
               "config": config.to_dict(), "vertical_datum": vertical_datum,
               "gcp_sha256": sha256_file(gcp) if gcp else None,
               "geo_sha256": sha256_file(geo) if geo else None}
+    if "survey_selection" in source_manifest:
+        inputs["survey_selection"] = source_manifest["survey_selection"]
     stages = ["export"]
     if config.product == "terrain":
         stages += ["terrain-input", "odm"]

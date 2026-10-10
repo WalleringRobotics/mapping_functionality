@@ -26,8 +26,18 @@ def seal(root):
         if p.is_file() and p.name not in {'state', 'SHA256SUMS'}))
 
 
+def test_alternating_timestamp_jitter_does_not_prove_hardware_sample_loss():
+    # Ten samples in 100 ms at 100 Hz, but four 16 ms intervals followed by short ones.
+    stamps = [0, 4, 20, 24, 40, 44, 60, 64, 80, 84]
+    result = sample_loss([t * 1_000_000 for t in stamps], 0, 100_000_000, 100)
+    assert result["missing_samples"] == 0
+    assert result["missing_in_gaps"] == 4
+    assert result["gap_estimate_exceeds_nominal_deficit"] is True
+    assert result["hardware_sample_loss"] is None
+
+
 def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=False, imu_drop=(),
-                imu_repeat=(), mono_fps=2, px4_burst=False):
+                imu_repeat=(), mono_fps=2, px4_burst=False, extra=None):
     root.mkdir()
     # The fixture IMU publishes at 100 Hz on gyro times, whatever the default profile.
     yaml = YAML()
@@ -91,6 +101,8 @@ def fixture_bag(root, *, missing=None, duplicate=False, short=False, tail_cut=Fa
                     t['geometry_msgs/msg/Vector3'](0.,0.,0.), zero,
                     t['geometry_msgs/msg/Vector3'](0.,0.,9.81), zero)
                 writer.write(conns['/mavros/imu/data'], ns, store.serialize_cdr(msg, msg.__msgtype__))
+        if extra:
+            extra(writer, store, header)
     seal(root)
     return root
 
@@ -217,7 +229,7 @@ def test_clean_imu_reports_no_in_window_loss(tmp_path):
     assert loss['requested_hz'] == 100
     assert (loss['samples'], loss['expected_samples'], loss['missing_samples']) == (501, 500, 0)
     assert (loss['gaps'], loss['repeated_samples']) == (0, 1)
-    assert not any('IMU sample loss' in warning for warning in report['warnings'])
+    assert not any('IMU continuity diagnostics' in warning for warning in report['warnings'])
     assert report['topics'][CAMERAS['rgb']]['in_window']['requested_hz'] == 2
 
 
@@ -231,8 +243,9 @@ def test_imu_loss_gaps_and_repeats_reported_against_requested_rate(tmp_path):
     assert loss['loss_percent'] == 1
     assert (loss['gaps'], loss['missing_in_gaps'], loss['repeated_samples']) == (2, 6, 1)
     assert loss['max_gap_ms'] == pytest.approx(60)
-    warning = next(w for w in report['warnings'] if 'IMU sample loss' in w)
-    assert '495 samples, 500 expected at 100 Hz (1.00% missing), 2 gaps (max 60 ms' in warning
+    warning = next(w for w in report['warnings'] if 'IMU continuity diagnostics' in w)
+    assert '495 samples, 500 expected at 100 Hz (1.00% count deficit), 2 interval gaps (max 60 ms' in warning
+    assert 'hardware loss unknown' in warning
 
 
 def test_imu_loss_restricted_to_acquisition_window(tmp_path):

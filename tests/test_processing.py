@@ -59,6 +59,24 @@ def test_synthetic_execution_and_input_nesting_rejected(session, tmp_path):
         process(session, tmp_path / "run", ProcessConfig(product="terrain"))
 
 
+def test_survey_profile_provenance_survives_preparation_and_resume(session, tmp_path):
+    manifest = json.loads((session / "manifest.json").read_text())
+    selection = {"plan_sha256": "a" * 64, "survey_legs_sha256": "b" * 64,
+                 "profile_hashes": {"handoff_sha256": "c" * 64, "aircraft_sha256": "d" * 64}}
+    manifest["survey_selection"] = selection
+    write_json(session / "manifest.json", manifest)
+    output = tmp_path / "survey-process"
+    report = process(session, output, ProcessConfig(), prepare_only=True)
+    assert report["inputs"]["survey_selection"] == selection
+    project = json.loads((output / "stages/export-001/project.json").read_text())
+    assert project["survey_selection"] == selection
+    process(session, output, ProcessConfig(), prepare_only=True, resume=True)
+    manifest["survey_selection"]["profile_hashes"]["aircraft_sha256"] = "e" * 64
+    write_json(session / "manifest.json", manifest)
+    with pytest.raises(ValueError, match="inputs/config changed"):
+        process(session, output, ProcessConfig(), prepare_only=True, resume=True)
+
+
 def test_attempt_failure_retained_and_retry_is_fresh(tmp_path):
     workflow = Workflow(tmp_path / "run", {"fixture": True}, False)
 

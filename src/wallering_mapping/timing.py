@@ -59,6 +59,10 @@ class SyncMonitor:
         self.good = 0
         self.previous = None
         self.ever_qualified = False
+        self.rejected_rtt = 0
+        self.rejected_residual = 0
+        self.rejected_any = 0
+        self.interrupted_streaks = []
 
     def observe(self, fields):
         remote = fields["remote_timestamp_ns"]
@@ -74,6 +78,11 @@ class SyncMonitor:
                 raise RuntimeError("MAVROS offset jump; start a new session")
         residual = abs(observed - estimated)
         good = rtt < self.max_rtt and residual <= self.config.max_offset_residual_ms * 1e6
+        self.rejected_rtt += rtt >= self.max_rtt
+        self.rejected_residual += residual > self.config.max_offset_residual_ms * 1e6
+        self.rejected_any += not good
+        if not good and self.good:
+            self.interrupted_streaks.append(self.good)
         self.good = self.good + 1 if good else 0
         qualified = self.good >= self.minimum
         self.ever_qualified |= qualified
@@ -83,3 +92,15 @@ class SyncMonitor:
                 "offset_residual_ns": residual,
                 "timesync_budget_ns": int(rtt * 1e6 / 2) + residual,
                 "meaning": "Conservative observation gate; applied UAS offset is not exposed"}
+
+    def diagnostics(self):
+        """Explain the existing gate without changing recorded qualification semantics."""
+        return {"rtt_rejected_samples": self.rejected_rtt,
+                "residual_rejected_samples": self.rejected_residual,
+                "any_rejected_samples": self.rejected_any,
+                "interrupted_streaks": len(self.interrupted_streaks),
+                "longest_interrupted_streak": max(self.interrupted_streaks, default=0),
+                "qualified_streak_interruptions": sum(n >= self.minimum for n in self.interrupted_streaks),
+                "rtt_limit_ms_exclusive": self.max_rtt,
+                "residual_limit_ms_inclusive": self.config.max_offset_residual_ms,
+                "policy": "Unchanged: every rejected sample resets the consecutive-good streak"}

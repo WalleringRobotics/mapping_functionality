@@ -1,0 +1,30 @@
+{
+  "schema": "wallering.plane-limits/v1",
+  "schema_version": 1,
+  "handoff_sha256": null,
+  "aircraft_id": null,
+  "pack_id": null,
+  "payload_id": null,
+  "calibration_id": null,
+  "calibration_sha256": null,
+  "source_files": {},
+  "endurance_basis": null,
+  "endurance_min": null,
+  "reserve_fraction": null,
+  "stall_speed_m_s": null,
+  "stall_margin": null,
+  "min_airspeed_m_s": null,
+  "max_airspeed_m_s": null,
+  "bank_limit_deg": null,
+  "min_turn_radius_m": null,
+  "wind_bound_m_s": null,
+  "climb_m_s": null,
+  "descent_m_s": null,
+  "launch_land_allowance_s": null,
+  "max_agl_m": null,
+  "terrain": {
+    "model": "level_at_home",
+    "height_uncertainty_m": null,
+    "evidence": null
+  }
+}
