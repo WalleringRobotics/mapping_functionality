@@ -2,7 +2,8 @@
 
 ## Open-issue continuation, 2026-10-10
 
-Local integration builds on the OpenSfM/ODM continuation (PR #24) and the existing
+[PR #29](https://github.com/WalleringRobotics/mapping_functionality/pull/29) builds
+on the OpenSfM/ODM continuation (PR #24) and the existing
 QGroundControl survey connection (PR #26). The new requests use the design
 repository's actual v1 handoff. No issue is closed by this software continuation;
 physical and simulator acceptance below remains explicit.
@@ -17,7 +18,7 @@ physical and simulator acceptance below remains explicit.
 | [#13](https://github.com/WalleringRobotics/mapping_functionality/issues/13), 20 fps | Documented stored 1200 s default-profile and 60 s candidate audits; new camera budgets refuse incompatible payload rates | Candidate 20-minute soak, RGB within requested-rate tolerance, storage/thermal evidence; default remains 2 fps |
 | [#14](https://github.com/WalleringRobotics/mapping_functionality/issues/14), optical timing | Offline explicit-counter/edge audit with full GPS weeks, reset/ambiguity refusal, independent delay/duration uncertainty and retained unmatched evidence | Real instrumented OAK optical/row timing and target observations; fixtures are not physical timing evidence |
 | [#15](https://github.com/WalleringRobotics/mapping_functionality/issues/15), umbrella | This table reconciles all 12 open issues and pending integration work | Each measured-acceptance issue must meet its own gate |
-| [#16](https://github.com/WalleringRobotics/mapping_functionality/issues/16), flight calibration | Inspected latest `b8e48cc` CI evidence: abort passes; mission takes off and lands but lacks four reached events. Strengthened mission matching and pre-progress numbering evidence | Resolve missing reached-event evidence; QGC load/save, simulator recorder/solver pipeline, then reviewed flight |
+| [#16](https://github.com/WalleringRobotics/mapping_functionality/issues/16), flight calibration | Real upstream PX4 mission and Hold/Land abort pass after separating waypoint acceptance regions and moving the speed command before takeoff; all 73 reached sequences recorded. Strengthened mission matching and pre-progress numbering evidence | QGC load/save, simulator recorder/solver pipeline, then reviewed flight; endpoint success does not qualify motion excitation |
 | [#18](https://github.com/WalleringRobotics/mapping_functionality/issues/18), IMU continuity | Audits distinguish nominal count deficit from interval-inferred gaps and flag disagreement; jitter regression proves complete counts are not evidence of hardware loss | Hardware continuity evidence and accepted 20-minute runs at both profiles |
 | [#27](https://github.com/WalleringRobotics/mapping_functionality/issues/27), camera/event platform | Handoff consumer, nominal camera export, recomputed link/storage/geometry gates, normalized counter/event audit and producer-export fixture | Vendor GigE driver, exact pixel/calibration import, raw UBX/PPK, generalized measured rig frames, failure/soak tests on each compute/storage variant |
 | [#28](https://github.com/WalleringRobotics/mapping_functionality/issues/28), Plane survey | Explicit Plane option in QGC checker: home numbering, separate air/groundspeed with wind, stall/bank/turn constraints, path/fence checks, terrain refusal, reserve and profile hashes; selection provenance propagation | Real QGC/Mission Planner Plane fixtures and MP parser, Plane SITL with recorder/abort, active GigE capture binding, reviewed flight |
@@ -33,6 +34,15 @@ Ruff, shell syntax and whitespace checks also passed. Logs are under ignored
 `runs/open-issues-20261010/` (`full-suite-final.txt` and
 `final-mission-checks.txt`). These software checks supply no new physical or
 simulator qualification evidence.
+
+Integration review follow-up: the real upstream PX4 mission and abort subsequently
+passed in [run 38068010103](https://github.com/WalleringRobotics/mapping_functionality/actions/runs/38068010103)
+at `1984865`; see [the simulator evidence](hardware-acceptance.md#px4-sih-mission-and-abort-2026-10-10).
+Review fixes also bind segment time to commanded speed, refuse unmodelled mission
+execution, preserve the camera speed bound and retain stop-announcement reports
+for timed and manually interrupted recordings. The focused image-runtime runs
+passed 76 tests, then 56 tests after the additional review fixes; complete remote
+CI remains the merge check for each pushed revision.
 
 ## Acceptance milestones
 

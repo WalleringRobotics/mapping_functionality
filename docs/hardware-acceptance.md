@@ -4,6 +4,31 @@ See the [command guide](hardware-commands.md) for the complete reproducible comm
 set and passive serial diagnostics, and the
 [repository skill](../skills/jetson-mapping-checks/SKILL.md) for future agent sessions.
 
+## PX4 SIH mission and abort: 2026-10-10
+
+[Run 38068010103](https://github.com/WalleringRobotics/mapping_functionality/actions/runs/38068010103)
+at `1984865` built the pinned upstream PX4 v1.17.0 and passed both the complete
+mission and a separate Hold-then-Land abort in containers without network or
+physical devices. Both used plan SHA-256
+`545b2118a3d5f1a0ddb6e7b533229ed33e352f321187ebcd084cbf6d3704bdda`.
+The downloaded artifacts are preserved under ignored
+`runs/open-issues-20261010/px4-ci-1984865/`.
+
+The prior small-pattern mission used PX4's default 2 m waypoint acceptance radius
+despite adjacent points being as close as 0.862 m. Rapid completions were missing
+from the latest-value mission-result stream (some also from ULog). The generator
+now requires nonoverlapping adjacent acceptance regions, uses explicit 0.3 m
+waypoint radii by default, and sets speed before takeoff to separate takeoff
+completion from the immediate speed command. The simulator's requirement for
+explicit received navigation completion events is unchanged.
+
+The new mission recorded all 73 reached sequences, 20,146 position samples,
+takeoff and landing/disarming. Maximum reported relative altitude was 13.155 m
+(supplied ceiling 15 m); maximum horizontal speed was 1.991 m/s. The abort run
+observed Hold and then landing/disarming. These results qualify this simulator
+mission/abort check only: QGC runtime round-tripping, recorder/solver integration,
+yaw/hold/axis excitation, fence enforcement and physical flight remain unqualified.
+
 ## Stored soak and CI evidence reviewed 2026-10-10
 
 This is a read-only review of existing October 4 reports, not a fresh hardware
@@ -32,7 +57,7 @@ count deficit: these are different diagnostics, not 499 proven hardware drops.
 New audits label that distinction and report TIMESYNC streak rejection causes;
 the acceptance rule is unchanged. This short candidate does not satisfy #13/#18.
 
-The latest upstream simulator run for PR #24,
+The earlier upstream simulator run for PR #24,
 [CI run 37214470816](https://github.com/WalleringRobotics/mapping_functionality/actions/runs/37214470816)
 at `b8e48cc`, was downloaded into
 `runs/open-issues-20261010/px4-ci-b8e48cc/`. Its abort report **passes**, including
@@ -40,8 +65,9 @@ observed Hold followed by landing/disarming. Its mission report records takeoff,
 8400 position samples and landing/disarming, but **fails** because navigation
 items 0, 25, 34 and 35 have no recorded `MISSION_ITEM_REACHED`. Their completion
 must not be inferred merely from later sequence numbers. The missing-event cause
-and recorder/solver pipeline remain unresolved under #16; no simulator success
-or new physical flight is claimed.
+was subsequently addressed by the generator correction above. The recorder/solver
+pipeline remains unresolved under #16; this earlier failed run is retained as
+evidence and no new physical flight is claimed.
 
 **Update 2026-10-04:** The stack runs in the repository Docker image (verified below). BNO086 firmware is now 3.9.9. The default stack uses the
 official Luxonis ROS driver, MAVROS and standard rosbag2/MCAP. The final bench
