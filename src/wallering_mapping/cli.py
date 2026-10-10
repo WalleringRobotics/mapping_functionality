@@ -66,7 +66,7 @@ def parser():
     doctor.add_argument("--output-root", type=Path, required=True)
     doctor.add_argument("--probe-device", action="store_true")
     doctor.add_argument("--device-id")
-    doctor.add_argument("--backend", choices=["building", "terrain"], default="building")
+    doctor.add_argument("--backend", choices=["building", "terrain", "opensfm"], default="building")
     hardware = commands.add_parser("hardware-check", help="Run legacy SDK or processing startup probes")
     hardware.add_argument("--mode", choices=["capture", "building", "terrain"], default="capture")
     hardware.add_argument("--config", type=Path, default=Path("configs/oakd-survey.json"))

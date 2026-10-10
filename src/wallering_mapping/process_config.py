@@ -1,4 +1,4 @@
-"""Versioned processing recipes shared by the two product backends."""
+"""Versioned processing recipes for upstream photogrammetry engines."""
 
 import json
 import math
@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 @dataclass(frozen=True)
 class ProcessConfig:
     product: str = "building"
+    backend: str = "auto"
     stream: str = "rgb"
     interval_seconds: float = 0.5
     min_sharpness: float = 0
@@ -35,6 +36,12 @@ class ProcessConfig:
             "right",
         }:
             raise ValueError("product must be building/terrain; stream must be rgb/left/right")
+        if self.backend not in {"auto", "colmap", "opensfm", "odm"}:
+            raise ValueError("backend must be auto/colmap/opensfm/odm")
+        if (self.product == "terrain") != (self.resolved_backend == "odm"):
+            raise ValueError("Terrain requires ODM; building requires COLMAP or OpenSfM")
+        if self.resolved_backend == "opensfm" and self.mesh:
+            raise ValueError("OpenSfM produces sparse/dense clouds; set mesh=false or use ODM")
         if self.matcher not in {"exhaustive", "sequential"}:
             raise ValueError("Unknown matcher")
         for key in ("allow_gaps", "cpu", "dense", "mesh", "dtm"):
@@ -82,7 +89,15 @@ class ProcessConfig:
             )
 
     def to_dict(self):
-        return asdict(self)
+        values = asdict(self)
+        # Preserve the serialized input contract of existing COLMAP/ODM runs.
+        if self.backend == "auto":
+            values.pop("backend")
+        return values
+
+    @property
+    def resolved_backend(self):
+        return ("odm" if self.product == "terrain" else "colmap") if self.backend == "auto" else self.backend
 
     @classmethod
     def read(cls, path):

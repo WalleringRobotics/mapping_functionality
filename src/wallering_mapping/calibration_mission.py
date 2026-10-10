@@ -17,6 +17,8 @@ def add_arguments(parser):
     parser.add_argument("--max-alt", required=True, type=float, help="Site ceiling above home in metres")
     parser.add_argument("--altitude-step", type=float, default=3)
     parser.add_argument("--yaw-hold", type=float, default=4)
+    parser.add_argument("--acceptance-radius", type=float, default=.3,
+                        help="Waypoint acceptance radius in metres; must separate figure-eight endpoints")
     parser.add_argument("--output", required=True, type=Path)
 
 
@@ -27,11 +29,11 @@ def run(args):
         raise ValueError("--home must be latitude,longitude") from error
     return generate_mission(home, args.home_amsl_m, args.alt, args.speed, args.radius,
                             args.site_radius, args.margin, args.max_alt, args.output,
-                            args.altitude_step, args.yaw_hold)
+                            args.altitude_step, args.yaw_hold, args.acceptance_radius)
 
 
 def generate_mission(home, home_amsl_m, alt, speed, radius, site_radius, margin, max_alt,
-                     output, altitude_step=3, yaw_hold=4):
+                     output, altitude_step=3, yaw_hold=4, acceptance_radius=.3):
     """Write a deterministic QGC plan and hash-bound phase map, refusing replacement.
 
     Bounds are engineering limits for a draft, not airspace/site approval. The
@@ -42,7 +44,8 @@ def generate_mission(home, home_amsl_m, alt, speed, radius, site_radius, margin,
 
     values = {"home_amsl_m": home_amsl_m, "alt": alt, "speed": speed, "radius": radius,
               "site_radius": site_radius, "margin": margin, "max_alt": max_alt,
-              "altitude_step": altitude_step, "yaw_hold": yaw_hold}
+              "altitude_step": altitude_step, "yaw_hold": yaw_hold,
+              "acceptance_radius": acceptance_radius}
     if len(home) != 2 or not all(math.isfinite(v) for v in (*home, *values.values())):
         raise ValueError("All site and mission inputs must be finite; home is latitude,longitude")
     latitude, longitude = home
@@ -50,7 +53,8 @@ def generate_mission(home, home_amsl_m, alt, speed, radius, site_radius, margin,
         raise ValueError("Home latitude must be within +/-80 and longitude within +/-180 degrees")
     bounds = {"home_amsl_m": (-500, 8000), "alt": (5, 100), "speed": (.5, 5),
               "radius": (5, 100), "site_radius": (10, 500), "margin": (5, 100),
-              "max_alt": (5, 120), "altitude_step": (1, 10), "yaw_hold": (2, 30)}
+              "max_alt": (5, 120), "altitude_step": (1, 10), "yaw_hold": (2, 30),
+              "acceptance_radius": (.1, 2)}
     for name, (lower, upper) in bounds.items():
         if not lower <= values[name] <= upper:
             raise ValueError(f"{name} must be in [{lower}, {upper}]")
@@ -60,6 +64,10 @@ def generate_mission(home, home_amsl_m, alt, speed, radius, site_radius, margin,
         raise ValueError("Margin must reserve at least three seconds of travel at requested speed")
     if alt + altitude_step > max_alt:
         raise ValueError("Altitude step exceeds the supplied site ceiling above home")
+    figure = [(radius * math.sin(step * math.tau / 24),
+               radius * .5 * math.sin(2 * step * math.tau / 24)) for step in range(25)]
+    if 2 * acceptance_radius >= min(math.dist(a, b) for a, b in zip(figure, figure[1:])):
+        raise ValueError("Waypoint acceptance regions overlap adjacent figure-eight endpoints")
     output = Path(output).resolve()
     sidecar = output.with_suffix(output.suffix + ".phases.json")
     if output.suffix != ".plan":
@@ -80,7 +88,8 @@ def generate_mission(home, home_amsl_m, alt, speed, radius, site_radius, margin,
         item = {"type": "SimpleItem", "autoContinue": True, "doJumpId": len(items) + 1,
                 "command": command, "frame": 3 if navigation else 2,
                 "params": params if params is not None else
-                [hold, 0, 0, yaw, round(lat, 9), round(lon, 9), altitude]}
+                [hold, acceptance_radius if command == 16 else 0, 0, yaw,
+                 round(lat, 9), round(lon, 9), altitude]}
         if navigation:
             item.update(Altitude=altitude, AltitudeMode=1, AMSLAltAboveTerrain=None)
         phases.append({"mission_seq": len(items), "do_jump_id": len(items) + 1,
@@ -88,8 +97,10 @@ def generate_mission(home, home_amsl_m, alt, speed, radius, site_radius, margin,
                        "relative_alt_m": altitude if navigation else None})
         items.append(item)
 
-    add(22, "takeoff")
+    # An immediate command after takeoff can overwrite its reached result before
+    # PX4 publishes it. Apply speed first so the next item requires actual flight.
     add(178, "speed", params=[1, speed, -1, 0, 0, 0, 0])
+    add(22, "takeoff")
     for yaw in (0, 90, 180, -90, 0, -90, 180, 90, 0):
         add(16, "yaw", yaw=yaw, hold=yaw_hold)
     for lap in range(2):

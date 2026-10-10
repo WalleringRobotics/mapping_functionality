@@ -38,3 +38,11 @@ def test_doctor_process_reports_missing_engine(tmp_path, monkeypatch):
     assert not result["ready"]
     assert any(c["name"] == "colmap" and not c["ok"] for c in result["checks"])
     assert "versions" in result["provenance"]
+
+
+def test_opensfm_doctor_does_not_require_colmap(tmp_path, monkeypatch):
+    monkeypatch.setattr("wallering_mapping.operations.shutil.which", lambda name: "/bin/" + name)
+    result = doctor("process", tmp_path, backend="opensfm")
+    names = {check["name"] for check in result["checks"]}
+    assert {"docker", "pyproj"} <= names
+    assert "colmap" not in names and "pycolmap" not in names

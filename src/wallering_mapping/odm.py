@@ -282,6 +282,30 @@ def verify_camera(actual, expected):
                 raise ValueError(f"ODM calibration mismatch: {key}")
 
 
+def inspect_outputs(image, output, config, container_name):
+    """Reuse ODM's GDAL/PDAL; file size alone cannot validate terrain products."""
+    inspector = Path(__file__).with_name("odm_products.py").resolve()
+    if "," in str(inspector) or "," in str(output):
+        raise ValueError("Docker bind path must not contain commas")
+    command = [
+        "docker", "run", "--rm", "--name", container_name, "--network", "none", "--user",
+        f"{os.getuid()}:{os.getgid()}", "--env", "HOME=/tmp",
+        "--env", "OPENBLAS_NUM_THREADS=1", "--env", "OMP_NUM_THREADS=1",
+        "--mount", f"type=bind,src={output.resolve() / 'site'},dst=/site,readonly",
+        "--mount", f"type=bind,src={inspector},dst=/inspect-products.py,readonly",
+        "--entrypoint", "/code/venv/bin/python3", image, "/inspect-products.py", "/site",
+    ]
+    if config.dtm:
+        command.append("--dtm")
+    log = output / "logs/03-inspect-products.log"
+    run_logged(command, log)
+    result = json.loads(log.read_text().splitlines()[-1])
+    if result.get("valid") is not True:
+        raise ValueError("ODM products failed GDAL/PDAL inspection")
+    write_json(output / "product-validation.json", result)
+    return result
+
+
 def execute(prepared, output, config):
     metadata = json.loads((prepared / "preparation.json").read_text())
     if metadata["status"] != "ready" or metadata["source_type"] == "synthetic":
@@ -374,7 +398,8 @@ def execute(prepared, output, config):
             ):
                 raise ValueError("ODM textured mesh is missing materials/textures")
             required += textures
-        state["products"] = inventory(output, required)
+        state["product_validation"] = inspect_outputs(engine["id"], output, config, name)
+        state["products"] = inventory(output, [*required, output / "product-validation.json"])
         state.update(
             status="complete",
             input_reference=metadata["reference"],
