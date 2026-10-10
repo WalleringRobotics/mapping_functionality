@@ -3,6 +3,8 @@
 ## Acceptance milestones
 
 Status as of 2026-10-04; evidence is in [hardware acceptance](hardware-acceptance.md).
+The [first flight plan](first-flight-plan.md) lists the blockers, accuracy estimates
+and phased steps toward the first flight and map.
 
 | Milestone | Evidence required | Current state |
 |---|---|---|
