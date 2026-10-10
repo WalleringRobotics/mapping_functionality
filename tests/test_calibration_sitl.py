@@ -52,8 +52,8 @@ def plan(tmp_path):
 
 
 def test_transport_preserves_unspecified_yaw_and_actual_coordinates(plan):
-    item = sitl.mission_items(plan)[0]
-    wire = SimpleNamespace(seq=0, frame=6, command=22, autocontinue=1,
+    item = sitl.mission_items(plan)[1]
+    wire = SimpleNamespace(seq=1, frame=6, command=22, autocontinue=1,
         param1=0., param2=0., param3=0., param4=float("nan"),
         x=473977420, y=85455940, z=8., get_type=lambda: "MISSION_ITEM_INT")
     decoded = sitl.comparable_download(wire)
@@ -74,7 +74,7 @@ def test_download_refuses_changed_identity(plan, field, value):
 def test_download_refuses_coordinate_or_unspecified_yaw_changes(plan, value):
     items = sitl.mission_items(plan)
     changed = copy.deepcopy(items)
-    changed[0]["params"][4 if value is None else 3] = value
+    changed[1]["params"][4 if value is None else 3] = value
     with pytest.raises(ValueError, match="parameter"):
         sitl.check_download(items, changed)
 
@@ -82,7 +82,7 @@ def test_download_refuses_coordinate_or_unspecified_yaw_changes(plan, value):
 def test_download_coordinates_require_integer_mavlink_precision(plan):
     items = sitl.mission_items(plan)
     changed = copy.deepcopy(items)
-    changed[0]["params"][4] += 1e-6  # about 11 cm: cannot use a generic float tolerance
+    changed[1]["params"][4] += 1e-6  # about 11 cm: cannot use a generic float tolerance
     with pytest.raises(ValueError, match="parameter"):
         sitl.check_download(items, changed)
 
@@ -99,11 +99,11 @@ def test_px4_canonical_yaw_preserves_the_same_heading(plan):
 
 
 @pytest.mark.parametrize("mutation", [
-    lambda p: p["mission"]["items"][0].update(command=400),  # arbitrary arm command
-    lambda p: p["mission"]["items"][0].update(frame=0),  # unexpected altitude reference
-    lambda p: p["mission"]["items"][0]["params"].__setitem__(4, None),
-    lambda p: p["mission"]["items"][0]["params"].__setitem__(6, 1000),
-    lambda p: p["mission"]["items"][0]["params"].__setitem__(4, float("nan")),
+    lambda p: p["mission"]["items"][1].update(command=400),  # arbitrary arm command
+    lambda p: p["mission"]["items"][1].update(frame=0),  # unexpected altitude reference
+    lambda p: p["mission"]["items"][1]["params"].__setitem__(4, None),
+    lambda p: p["mission"]["items"][1]["params"].__setitem__(6, 1000),
+    lambda p: p["mission"]["items"][1]["params"].__setitem__(4, float("nan")),
 ])
 def test_non_generator_mission_cannot_reach_simulator_transport(plan, mutation):
     mutation(plan)

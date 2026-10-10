@@ -17,12 +17,21 @@ include takeoff and landing. The generator reserves `--margin` outside the patte
 and at least three seconds of travel at the requested speed. These engineering
 bounds do not establish braking distance, terrain clearance, legality or safety.
 
-The draft contains takeoff, a speed command, heading targets at hover in both
+The draft contains a speed command, takeoff, heading targets at hover in both
 directions, two sampled figure-eights, two-axis translation reversals with holds,
 altitude steps, return and landing at home. Heading targets are **not proof of a
 completed pirouette**. Actual yaw response, tracking, cornering and holds need SITL
 and flight evidence. Multicopter motion cannot replace rich hand rotations for
 roll/pitch calibration; solvers must reject poorly observed axes or translation.
+
+Waypoints use an explicit `--acceptance-radius` (default 0.3 m). The generator
+rejects overlapping acceptance regions on adjacent figure-eight points: at the
+smallest 5 m pattern radius, their minimum spacing is about 0.862 m, smaller than
+PX4's default 2 m acceptance radius. The selected radius requires simulator and
+physical tracking review; it does not establish achievable position accuracy.
+The speed command precedes takeoff so an immediate command cannot overwrite the
+takeoff completion in PX4's latest-value mission-result publication. The simulator
+still requires a received completion event for every takeoff and waypoint.
 
 The JSON uses QGC Plan v1, Mission v2, simple MAVLink items, and a circular inclusion
 fence. Navigation uses relative-home altitude. See the official

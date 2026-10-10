@@ -25,8 +25,8 @@ def test_plan_is_deterministic_and_all_navigation_stays_within_site(tmp_path):
     assert plan["fileType"] == "Plan" and plan["version"] == 1
     assert (plan["mission"]["firmwareType"], plan["mission"]["vehicleType"]) == (12, 2)
     items = plan["mission"]["items"]
-    assert items[0]["command"] == 22 and items[-1]["command"] == 21
-    assert items[1]["command"] == 178 and items[1]["params"][:3] == [1, 2, -1]
+    assert items[1]["command"] == 22 and items[-1]["command"] == 21
+    assert items[0]["command"] == 178 and items[0]["params"][:3] == [1, 2, -1]
     geod = Geod(ellps="WGS84")
     for seq, (item, phase) in enumerate(zip(items, phase_map["mission_items"], strict=True)):
         assert item["doJumpId"] == phase["do_jump_id"] == seq + 1
@@ -54,6 +54,8 @@ def test_plan_is_deterministic_and_all_navigation_stays_within_site(tmp_path):
     ({"margin": 5, "speed": 2}, "three seconds"),
     ({"alt": 29}, "ceiling"),
     ({"altitude_step": 0}, "altitude_step"),
+    ({"radius": 5, "acceptance_radius": .5}, "overlap"),
+    ({"acceptance_radius": 0}, "acceptance_radius"),
 ])
 def test_unsafe_or_invalid_parameters_do_not_create_outputs(tmp_path, overrides, reason):
     with pytest.raises(ValueError, match=reason):
@@ -68,6 +70,18 @@ def test_no_replacement_even_when_only_phase_map_exists(tmp_path):
         mission(tmp_path)
     assert sidecar.read_text() == "operator evidence"
     assert not (tmp_path / "calibration.plan").exists()
+
+
+def test_smallest_pattern_has_disjoint_waypoint_acceptance_regions(tmp_path):
+    mission(tmp_path, radius=5)
+    items = json.loads((tmp_path / "calibration.plan").read_text())["mission"]["items"]
+    phases = json.loads((tmp_path / "calibration.plan.phases.json").read_text())["mission_items"]
+    figure = [item for item, phase in zip(items, phases) if phase["phase"] == "figure_eight"]
+    geod = Geod(ellps="WGS84")
+    for before, after in zip(figure, figure[1:]):
+        a, b = before["params"], after["params"]
+        assert 0 < a[1] == b[1] == .3
+        assert geod.inv(a[5], a[4], b[5], b[4])[2] > a[1] + b[1]
 
 
 def test_parser_requires_site_inputs_and_generation_never_claims_flight_acceptance(tmp_path):
