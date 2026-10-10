@@ -14,6 +14,8 @@ bag_mount=""
 bag_min_free=5368709120
 bag_kind=survey
 bag_px4_rate=0
+bag_survey=""
+bag_announce=false
 while (($#)); do
   case "$1" in
     --output) bag_output="$2"; shift 2 ;;
@@ -25,9 +27,11 @@ while (($#)); do
     --fcu-url) bag_fcu_url="$2"; shift 2 ;;
     --kind) bag_kind="$2"; shift 2 ;;
     --px4-imu-rate) bag_px4_rate="$2"; shift 2 ;;
+    --survey-check) bag_survey="$2"; shift 2 ;;
+    --announce) bag_announce=true; shift ;;
     --camera-only) bag_camera_only=true; shift ;;
     --start-mavros) bag_start_mavros=true; shift ;;
-    --help) echo "Usage: $0 --output NEW_DIRECTORY [--duration SECONDS] [--warmup SECONDS] [--config OAK_YAML] [--device-id ID] [--camera-only | --start-mavros] [--fcu-url URL] [--require-mount MOUNT] [--kind survey|calibration] [--px4-imu-rate 0|100]"; exit 0 ;;
+    --help) echo "Usage: $0 --output NEW_DIRECTORY [--duration SECONDS] [--warmup SECONDS] [--config OAK_YAML] [--device-id ID] [--camera-only | --start-mavros] [--fcu-url URL] [--require-mount MOUNT] [--kind survey|calibration] [--px4-imu-rate 0|100] [--survey-check CHECKED_DIR] [--announce]"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -40,6 +44,18 @@ done
 # Keep MAVROS alive through cleanup, including launch interruption/failure.
 if [[ "$bag_px4_rate" != 0 && ( "$bag_camera_only" == true || "$bag_start_mavros" == true ) ]]; then
   echo "A PX4 rate request requires an existing MAVROS owner; start MAVROS separately" >&2; exit 2
+fi
+# A checked QGroundControl plan and operator announcements both need PX4 through MAVROS.
+bag_survey_sha=null
+if [[ -n "$bag_survey" ]]; then
+  [[ "$bag_camera_only" == false && "$bag_kind" == survey ]] || {
+    echo "A survey plan needs PX4 telemetry and a survey recording" >&2; exit 2; }
+  bag_survey="$(realpath "$bag_survey")"
+  bag_survey_sha="\"$(python3 "$bag_repo/src/wallering_mapping/recording.py" --verify-survey "$bag_survey")\"" || {
+    echo "Use a plan that passed wr-map survey-check" >&2; exit 2; }
+fi
+if [[ "$bag_announce" == true && "$bag_camera_only" == true ]]; then
+  echo "Announcements go through MAVROS; remove --camera-only" >&2; exit 2
 fi
 if [[ "$bag_kind" == calibration ]]; then
   [[ "$bag_duration" == 110 ]] || { echo "Calibration guidance requires --duration 110" >&2; exit 2; }
@@ -67,8 +83,12 @@ cp "$bag_repo/deploy/record-rosbag-checks.sh" "$bag_output/readiness-script.sh"
 cp "$bag_repo/src/wallering_mapping/recording.py" "$bag_output/recording.py"
 cp "$bag_repo/deploy/record-resources.py" "$bag_output/record-resources.py"
 cp "$bag_repo/deploy/seal-rosbag.sh" "$bag_output/seal-script.sh"
+if [[ -n "$bag_survey" ]]; then
+  cp "$bag_survey/survey-check.json" "$bag_survey/survey.plan" "$bag_output/"
+fi
 printf '%s\n' starting > "$bag_output/state"
-printf '{"schema_version": 1, "kind": "%s", "px4_imu_requested_hz": %s}\n' "$bag_kind" "$bag_px4_rate" > "$bag_output/session.json"
+printf '{"schema_version": 1, "kind": "%s", "px4_imu_requested_hz": %s, "survey_plan_sha256": %s, "announce": %s}\n' \
+  "$bag_kind" "$bag_px4_rate" "$bag_survey_sha" "$bag_announce" > "$bag_output/session.json"
 trap 'printf "%s\n" failed > "$bag_output/state"' EXIT
 date -u --iso-8601=ns > "$bag_output/started-utc.txt"
 dpkg-query -W -f='${Package} ${Version} ${Architecture}\n' 'ros-humble-depthai*' 'ros-humble-rosbag2*' 'ros-humble-mavros*' > "$bag_output/packages.txt" 2>/dev/null || true
@@ -90,7 +110,7 @@ if [[ "$bag_camera_only" == false ]]; then
   bag_topics+=(/mavros/state /mavros/imu/data_raw /mavros/imu/data /mavros/local_position/pose
     /mavros/global_position/global /mavros/global_position/raw/fix /mavros/timesync_status
     /mavros/time_reference /mavros/gpsstatus/gps1/raw /mavros/gpsstatus/gps1/rtk /uas1/mavlink_source
-    /mavros/mission/reached)
+    /mavros/mission/reached /mavros/mission/waypoints)
 fi
 printf '%s\n' "${bag_topics[@]}" > "$bag_output/topics.txt"
 # ROS launch handles child signals and escalation. Terminal Ctrl+C, Docker's
@@ -108,7 +128,8 @@ bag_device_args=()
 ros2 launch "$bag_output/record.launch.py" \
   "output:=$bag_output" "duration:=$bag_duration" "warmup:=$bag_warmup" \
   "camera_only:=$bag_camera_only" "start_mavros:=$bag_start_mavros" \
-  "fcu_url:=$bag_fcu_url" "kind:=$bag_kind" "px4_imu_rate:=$bag_px4_rate" "${bag_device_args[@]}" || bag_result=$?
+  "fcu_url:=$bag_fcu_url" "kind:=$bag_kind" "px4_imu_rate:=$bag_px4_rate" \
+  "announce:=$bag_announce" "${bag_device_args[@]}" || bag_result=$?
 # The existing MAVROS process outlives launch. Restore defaults even after a
 # partial request or launch failure; record a failed cleanup instead of hiding it.
 if [[ -f "$bag_output/px4-rate-request.json" ]]; then

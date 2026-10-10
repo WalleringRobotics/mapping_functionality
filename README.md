@@ -50,6 +50,10 @@ stored rig using `wr-map validate SESSION --rig-calibration rig.json`. See the
 [physical optical/target acceptance procedure](docs/optical-target-acceptance.md).
 The 20 fps profiles are qualification candidates; the production camera default
 remains 2 fps until a complete soak meets its acceptance criteria.
+Mapping flights are planned in QGroundControl's Survey pattern. `wr-map survey-check`
+checks the saved plan against the capture profile, `wr-map capture --survey-check`
+binds it to the recording, and `wr-map survey-legs` with `bag-import --survey-legs`
+keeps only images flown on survey legs; see the [survey planning guide](docs/survey-planning.md).
 `wr-map sync-bag SESSION --rig-calibration rig.json --output NEW_DIRECTORY`
 produces diagnostic camera poses directly from sealed ROS recordings. Timestamp
 corrections require an explicit evidenced bridge; see the
@@ -156,6 +160,7 @@ simulated PX4 publishers. OAK/PX4 hardware remains outside automated coverage.
 - [Surveyed-base NTRIP, per-image budgets and total map accuracy](docs/rtk-accuracy.md)
 - [Jetson setup and commissioning](docs/jetson-setup.md)
 - [Capture geometry and field procedure](docs/acquisition.md)
+- [Survey planning with QGroundControl](docs/survey-planning.md)
 - [Postprocessing recipes, control formats and recovery](docs/postprocessing.md)
 - [Camera upgrades and remaining qualification](docs/roadmap.md)
 - [Primary references and confidence](docs/references.md)

@@ -51,6 +51,17 @@ def recording_actions(context):
              value('px4_imu_rate')],
         name='readiness', output='log')
 
+    announcers = []
+
+    def announcer(event):
+        # Operator notice only: its outcome is in announce-*.json and never stops recording.
+        process = ExecuteProcess(
+            cmd=['python3', str(output / 'recording.py'), '--announce', event,
+                 '--report', str(output / f'announce-{event}.json')],
+            name=f'announce-{event}', output='log')
+        announcers.append(process)
+        return process
+
     phases = {'schema_version': 1, 'kind': 'calibration',
               'meaning': 'Operator prompts; not measured motion or ground truth', 'phases': []}
 
@@ -67,13 +78,14 @@ def recording_actions(context):
     def end_interval(_context):
         write('acquisition-end-ns.txt', time.time_ns())
         write('state', 'postroll')
-        return [TimerAction(period=2., actions=[
+        actions = [announcer('stopped')] if value('announce') == 'true' else []
+        return actions + [TimerAction(period=2., actions=[
             EmitEvent(event=Shutdown(reason='Requested recording duration complete'))])]
 
     def begin_interval(_context):
         write('acquisition-start-ns.txt', time.time_ns())
         write('state', 'recording')
-        actions = []
+        actions = [announcer('started')] if value('announce') == 'true' else []
         if value('kind') == 'calibration':
             actions.extend(prompt_phase(_context, 0))
         if duration:
@@ -82,6 +94,8 @@ def recording_actions(context):
         return actions
 
     def process_exited(event, launch_context):
+        if event.action in announcers:
+            return []
         if event.action is recorder:
             write('recorder-exit-code.txt', event.returncode)
             if event.returncode != 0:
@@ -137,5 +151,6 @@ def generate_launch_description():
         DeclareLaunchArgument('fcu_url', default_value='/dev/ttyUSB0:921600'),
         DeclareLaunchArgument('kind', default_value='survey'),
         DeclareLaunchArgument('px4_imu_rate', default_value='0'),
+        DeclareLaunchArgument('announce', default_value='false'),
         OpaqueFunction(function=recording_actions),
     ])

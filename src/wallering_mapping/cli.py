@@ -41,6 +41,10 @@ def parser():
     record.add_argument("--fcu-url", default="/dev/ttyUSB0:921600")
     record.add_argument("--px4-imu-rate", type=int, choices=[0, 100], default=0,
                         help="Request PX4 IMU Hz per session (existing MAVROS only); 0 leaves streams alone")
+    record.add_argument("--survey-check", type=Path,
+                        help="Directory written by survey-check; binds the plan and records the PX4 mission")
+    record.add_argument("--announce", action="store_true",
+                        help="Report recording start/stop in QGroundControl and on the vehicle buzzer")
     calibration_record = commands.add_parser("calibrate-record", help="110-second guided motion recording")
     calibration_record.add_argument("--output", type=Path, required=True)
     calibration_record.add_argument("--config", type=Path, default=Path("configs/oakd-ros-calibration.yaml"))
@@ -54,6 +58,8 @@ def parser():
     bag_import = commands.add_parser("bag-import", help="Offline lossless image import from a sealed ROS recording")
     bag_import.add_argument("session", type=Path)
     bag_import.add_argument("--output", type=Path, required=True)
+    bag_import.add_argument("--survey-legs", type=Path,
+                            help="survey-legs.json; import only frames on qualified survey legs")
     record = commands.add_parser("legacy-capture", help="Legacy direct-SDK diagnostic writer (not the recording stack)")
     record.add_argument("--config", type=Path, required=True)
     record.add_argument("--output", type=Path, required=True)
@@ -184,6 +190,13 @@ def parser():
     from .calibration_flight import add_arguments as flight_arguments
     flight = commands.add_parser("calibrate-flight-phases", help="Extract sealed mission progress with numbering evidence")
     flight_arguments(flight)
+    from .survey_plan import add_arguments as survey_arguments
+    survey_check = commands.add_parser("survey-check",
+                                       help="Check a QGroundControl Survey plan against the capture profile")
+    survey_arguments(survey_check)
+    from .survey_flight import add_arguments as legs_arguments
+    survey_legs = commands.add_parser("survey-legs", help="Survey-leg windows from a sealed survey recording")
+    legs_arguments(survey_legs)
     calibration = commands.add_parser("calibrate", help="Record, solve and verify rig calibration")
     modes = calibration.add_subparsers(dest="calibration_command", required=True)
     for name in ("record", "solve", "camera", "mission", "flight-phases"):
@@ -205,6 +218,16 @@ def main(argv=None):
             result = run(args)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
+        elif args.command == "survey-check":
+            from .survey_plan import run
+            result = run(args)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "survey-legs":
+            from .survey_flight import run
+            result = run(args)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
         elif args.command == "inspect":
             from .oak import inspect_device
             result = inspect_device(args.device_id)
@@ -223,13 +246,16 @@ def main(argv=None):
                 command.extend(["--kind", "calibration"])
                 print("Calibration: props off, support the rigid rig, protect cables, and keep "
                       "a textured scene at least 2 m away. Wait for the live motion prompts.", flush=True)
-            for flag, value in (("--device-id", args.device_id), ("--require-mount", args.require_mount)):
+            for flag, value in (("--device-id", args.device_id), ("--require-mount", args.require_mount),
+                                ("--survey-check", getattr(args, "survey_check", None))):
                 if value:
                     command.extend([flag, str(value)])
             if args.camera_only:
                 command.append("--camera-only")
             if args.start_mavros:
                 command.append("--start-mavros")
+            if getattr(args, "announce", False):
+                command.append("--announce")
             os.execvp("bash", command)
         elif args.command == "legacy-capture":
             from .oak import record
@@ -285,7 +311,7 @@ def main(argv=None):
                 result = status(args.session)
         elif args.command == "bag-import":
             from .bags import import_bag
-            result = import_bag(args.session, args.output)
+            result = import_bag(args.session, args.output, args.survey_legs)
         elif args.command == "simulate":
             from .simulate import simulate
             if args.frames < 1:

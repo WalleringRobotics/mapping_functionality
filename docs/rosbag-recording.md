@@ -85,6 +85,13 @@ not calibrated physical exposure timestamps. Failed/preflight runs are retained;
 offline command below. The container init and systemd deliver stop signals to the
 foreground group. The shell merely survives that signal to finish sealing.
 
+### Survey flights
+
+`--survey-check DIR` binds a plan that passed `wr-map survey-check`, downloads the PX4
+mission once at readiness and records `/mavros/mission/waypoints` with the reached
+events. `--announce` reports recording start and stop to QGroundControl and the
+vehicle buzzer. Both need MAVROS. See the [survey planning guide](survey-planning.md).
+
 ## Inspect and replay
 
 ```bash

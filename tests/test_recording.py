@@ -55,3 +55,77 @@ def test_partial_request_failure_preserves_every_attempt_for_cleanup(tmp_path):
 def test_invalid_rate_is_rejected_before_calling_fcu(tmp_path, rate):
     with pytest.raises(ValueError):
         request_imu_rate(rate, tmp_path / "invalid.json", lambda *_: pytest.fail("called FCU"))
+
+
+def checked_plan(tmp_path, **plan):
+    from pathlib import Path
+    from qgc_plans import survey_plan, write_plan
+    from wallering_mapping.survey_plan import check_survey, write_check
+    repo = Path(__file__).resolve().parents[1]
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = write_plan(tmp_path / "field.plan", survey_plan(**plan))
+    report = check_survey(path, repo / "configs/qgc-oak-rgb-12mp.json", repo / "configs/oakd-ros.yaml", 15)
+    return write_check(path, tmp_path / "checked", report)
+
+
+def test_only_a_passed_unmodified_survey_check_can_be_bound(tmp_path):
+    from wallering_mapping.recording import verify_survey
+    from wallering_mapping.dataset import sha256_file
+    good = checked_plan(tmp_path)
+    assert verify_survey(good) == sha256_file(good / "survey.plan")
+    (good / "survey.plan").write_text((good / "survey.plan").read_text() + " ")
+    with pytest.raises(ValueError, match="differs"):
+        verify_survey(good)
+    failed = checked_plan(tmp_path / "high", height=130)
+    with pytest.raises(ValueError, match="did not pass"):
+        verify_survey(failed)
+
+
+def test_mission_download_records_success_and_failure_without_raising(tmp_path):
+    from wallering_mapping.recording import pull_mission
+    report = pull_mission(tmp_path / "pull.json", lambda: SimpleNamespace(success=True, wp_received=41))
+    assert report["success"] and report["wp_received"] == 41
+    assert json.loads((tmp_path / "pull.json").read_text()) == report
+    def timeout():
+        raise TimeoutError("no MAVROS")
+    failed = pull_mission(tmp_path / "failed.json", timeout)
+    assert not failed["success"] and "TimeoutError" in failed["error"]
+    with pytest.raises(FileExistsError):
+        pull_mission(tmp_path / "pull.json", timeout)
+
+
+def test_announcements_name_the_event_and_never_raise(tmp_path):
+    from wallering_mapping.recording import ANNOUNCEMENTS, announce
+    sent = []
+    report = announce("started", tmp_path / "start.json",
+                      lambda text, tune: sent.append((text, tune)) or {"statustext": True, "play_tune": True})
+    assert sent == [ANNOUNCEMENTS["started"]] and report["statustext"] and report["play_tune"]
+    assert len(report["text"]) <= 50  # MAVLink STATUSTEXT payload
+    def broken(*_):
+        raise RuntimeError("no rclpy")
+    failed = announce("stopped", tmp_path / "stop.json", broken)
+    assert not failed["statustext"] and "RuntimeError" in failed["error"]
+
+
+def test_capture_passes_survey_and_announce_flags():
+    args = parser().parse_args(["capture", "--output", "x", "--survey-check", "checked", "--announce"])
+    assert str(args.survey_check) == "checked" and args.announce
+
+
+@pytest.mark.parametrize("extra,message", [
+    (["--camera-only", "--survey-check", "CHECKED"], "needs PX4 telemetry"),
+    (["--survey-check", "FAILED"], "passed wr-map survey-check"),
+    (["--camera-only", "--announce"], "remove --camera-only"),
+])
+def test_recorder_refuses_survey_and_announce_misuse_before_ros(tmp_path, extra, message):
+    import subprocess
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    good = checked_plan(tmp_path / "good")
+    failed = checked_plan(tmp_path / "failed", height=130)
+    extra = [str(good) if value == "CHECKED" else str(failed) if value == "FAILED" else value
+             for value in extra]
+    result = subprocess.run(["bash", str(repo / "deploy/record-rosbag.sh"), "--output",
+                             str(tmp_path / "session"), *extra], capture_output=True, text=True)
+    assert result.returncode == 2 and message in result.stderr
+    assert not (tmp_path / "session").exists()
