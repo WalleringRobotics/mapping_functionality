@@ -76,11 +76,11 @@ The check refuses a plan when any of these fail:
 | Patterns | Survey only; corridor and structure scans are refused |
 | Camera | Custom Camera values match the camera definition within 0.5 %, same orientation |
 | Height | 10–120 m; relative or terrain altitude, not AMSL; every item below the limit |
-| Speed | An explicit flight speed before the survey |
+| Speed | An explicit absolute groundspeed before horizontal travel; unchanged throttle |
 | Overlap | Forward overlap at the profile frame rate is at least the planned overlap |
 | Blur | Speed × fixed exposure ≤ 0.5 px |
 | Consistency | QGC's saved line spacing agrees with the camera values |
-| Flight time | Estimated time within the budget |
+| Flight time | Each segment uses its active commanded speed; estimate stays within the budget |
 | Geofence | An inclusion fence contains home and every mission point |
 | Transects | Every PX4 item matches the saved transects in order |
 
@@ -91,6 +91,11 @@ including the zero-based PX4 index, role and transect of every mission item.
 
 A passing check is not airspace, site or operator approval, and `flight_ready`
 stays false.
+
+Speed commands with `-1` retain the previous speed. Default-speed resets,
+relative speed changes and airspeed/climb-speed commands are not modelled by the
+PX4 survey estimate and are refused. The maximum commanded speed remains the
+conservative bound used for camera blur and overlap checks.
 
 ## 4. Record
 

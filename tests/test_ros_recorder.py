@@ -119,6 +119,11 @@ elif args[:2] == ['bag', 'info']:
                 import json
                 started = json.loads((output / 'announce-started.json').read_text())
                 assert started['event'] == 'started' and not started['statustext']
+                stopped = json.loads((output / 'announce-stopped.json').read_text())
+                assert stopped['event'] == 'stopped' and not stopped['statustext']
+                assert stopped['finished_utc_ns'] > int((output / 'acquisition-end-ns.txt').read_text())
+                assert 'announce-stopped.json' in (output / 'SHA256SUMS').read_text()
+                assert not (output / 'announce-stopped-timeout.txt').exists()
                 assert json.loads((output / 'session.json').read_text())['announce'] is True
                 assert '/mavros/mission/waypoints' in (output / 'topics.txt').read_text()
             start = int((output / 'acquisition-start-ns.txt').read_text())

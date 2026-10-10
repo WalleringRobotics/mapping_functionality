@@ -269,16 +269,39 @@ def mission_speed(items):
     return max(speeds) if speeds else None
 
 
-def estimate_minutes(home, items, speed, limits, errors, warnings):
-    """Conservative time: horizontal at mission speed, vertical at PX4 auto limits, holds and stops."""
+def estimate_minutes(home, items, limits, errors, warnings):
+    """Time each horizontal segment at its active commanded groundspeed."""
     position, altitude, seconds, path = home[:2], 0.0, 0.0, 0.0
+    speed, unknown_speed = None, False
+
+    def travel_seconds(horizontal):
+        nonlocal unknown_speed
+        if horizontal <= limits["match_tolerance_m"]:
+            return 0.0
+        if speed is None:
+            if not unknown_speed:
+                errors.append("Horizontal travel requires an explicit groundspeed before that segment")
+            unknown_speed = True
+            return 0.0
+        return horizontal / speed
+
     ended = False
     for item in items:
         command = item["command"]
+        if command == CHANGE_SPEED:
+            p = item["params"]
+            requested = finite(p[1], "Commanded groundspeed")
+            if p[0] != 1 or p[2] != -1 or p[3] != 0 or (requested <= 0 and requested != -1):
+                errors.append(f"Item {item['mission_seq']} needs an absolute groundspeed command "
+                              "with unchanged throttle; default-speed resets are unsupported")
+                speed = None
+            elif requested != -1:  # MAVLink -1 preserves the previously commanded speed.
+                speed = requested
+            continue
         if command == RETURN_TO_LAUNCH:
             horizontal = distance_m(position, home[:2])
             path += horizontal
-            seconds += horizontal / speed + altitude / limits["land_m_s"] + limits["waypoint_penalty_s"]
+            seconds += travel_seconds(horizontal) + altitude / limits["land_m_s"] + limits["waypoint_penalty_s"]
             position, altitude, ended = home[:2], 0.0, True
             continue
         if "lat" not in item:
@@ -294,7 +317,7 @@ def estimate_minutes(home, items, speed, limits, errors, warnings):
         rate = limits["climb_m_s"] if climb > 0 else (
             limits["land_m_s"] if command == LAND else limits["descent_m_s"])
         hold = float(item["params"][0] or 0) if command in (16, 19) else 0.0
-        seconds += horizontal / speed + abs(climb) / rate + hold + limits["waypoint_penalty_s"]
+        seconds += travel_seconds(horizontal) + abs(climb) / rate + hold + limits["waypoint_penalty_s"]
         path += horizontal
         position, altitude = (item["lat"], item["lon"]), target
         ended = command == LAND
@@ -302,8 +325,8 @@ def estimate_minutes(home, items, speed, limits, errors, warnings):
         warnings.append("Mission does not end with Land or Return; the estimate adds a direct return")
         horizontal = distance_m(position, home[:2])
         path += horizontal
-        seconds += horizontal / speed + altitude / limits["land_m_s"]
-    return seconds / 60, path
+        seconds += travel_seconds(horizontal) + altitude / limits["land_m_s"]
+    return (None if unknown_speed else seconds / 60), path
 
 
 def check_fence(plan, home, items, errors):
@@ -444,9 +467,9 @@ def check_survey(plan_path, camera_path, profile_path, flight_time_budget_min, l
     flight = {"speed_m_s": speed, "frame_rate_hz": profile["fps"], "exposure_us": profile["exposure_us"],
               "budget_minutes": budget}
     if speed:
-        minutes, path = estimate_minutes(home, items, speed, limits, errors, warnings)
+        minutes, path = estimate_minutes(home, items, limits, errors, warnings)
         flight.update(estimated_minutes=minutes, path_length_m=path)
-        if minutes > budget:
+        if minutes is not None and minutes > budget:
             errors.append(f"Estimated flight time {minutes:.1f} min exceeds the {budget} min budget")
     else:
         errors.append("Mission speed is unknown")

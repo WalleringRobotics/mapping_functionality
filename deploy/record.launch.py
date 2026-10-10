@@ -52,6 +52,7 @@ def recording_actions(context):
         name='readiness', output='log')
 
     announcers = []
+    postroll = {'elapsed': False, 'announcer': None, 'announcement_finished': False}
 
     def announcer(event):
         # Operator notice only: its outcome is in announce-*.json and never stops recording.
@@ -75,12 +76,32 @@ def recording_actions(context):
                 OpaqueFunction(function=prompt_phase, kwargs={'index': index + 1})]))
         return actions
 
+    def finish_interval():
+        if postroll['elapsed'] and (
+                postroll['announcer'] is None or postroll['announcement_finished']):
+            return [EmitEvent(event=Shutdown(reason='Requested recording duration complete'))]
+        return []
+
+    def postroll_elapsed(_context):
+        postroll['elapsed'] = True
+        return finish_interval()
+
+    def announcement_deadline(_context):
+        if not postroll['announcement_finished']:
+            write('announce-stopped-timeout.txt', 'Stop announcer did not exit within 10 seconds')
+            return [EmitEvent(event=Shutdown(reason='Stop announcement deadline reached'))]
+        return []
+
     def end_interval(_context):
         write('acquisition-end-ns.txt', time.time_ns())
         write('state', 'postroll')
-        actions = [announcer('stopped')] if value('announce') == 'true' else []
+        actions = []
+        if value('announce') == 'true':
+            postroll['announcer'] = announcer('stopped')
+            actions.extend([postroll['announcer'], TimerAction(period=10., actions=[
+                OpaqueFunction(function=announcement_deadline)])])
         return actions + [TimerAction(period=2., actions=[
-            EmitEvent(event=Shutdown(reason='Requested recording duration complete'))])]
+            OpaqueFunction(function=postroll_elapsed)])]
 
     def begin_interval(_context):
         write('acquisition-start-ns.txt', time.time_ns())
@@ -95,6 +116,9 @@ def recording_actions(context):
 
     def process_exited(event, launch_context):
         if event.action in announcers:
+            if event.action is postroll['announcer']:
+                postroll['announcement_finished'] = True
+                return [] if launch_context.is_shutdown else finish_interval()
             return []
         if event.action is recorder:
             write('recorder-exit-code.txt', event.returncode)
