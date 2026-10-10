@@ -1,5 +1,17 @@
 # Working in this repository
 
+## Delivery workflow
+
+Use a feature branch for repository changes. Local changes alone are not a
+completed handoff: at minimum, commit the work and push the branch so it is
+remotely available. Open or update a pull request for review and include the
+validation results and any remaining acceptance work. Follow the PR review and
+required-check process before merging. Do not stop at a local-only result unless
+the user explicitly requests it; if publishing is blocked, report the blocker
+and the work that remains unpublished.
+
+## Runtime and hardware
+
 For Jetson/OAK/PX4 hardware verification, startup checks, or serial diagnostics,
 read [the repository hardware skill](skills/jetson-mapping-checks/SKILL.md).
 Its commands and supporting references are kept in this checkout.
