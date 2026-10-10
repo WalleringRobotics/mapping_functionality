@@ -130,6 +130,15 @@ ros2 launch "$bag_output/record.launch.py" \
   "camera_only:=$bag_camera_only" "start_mavros:=$bag_start_mavros" \
   "fcu_url:=$bag_fcu_url" "kind:=$bag_kind" "px4_imu_rate:=$bag_px4_rate" \
   "announce:=$bag_announce" "${bag_device_args[@]}" || bag_result=$?
+# On an operator stop launch cannot start new processes while shutting down.
+# Attempt the stop notice before sealing, using the separately owned MAVROS link.
+# Timed runs already wrote their report while launch and its publishers were alive.
+if [[ "$bag_announce" == true && -f "$bag_output/acquisition-start-ns.txt" &&
+      ! -f "$bag_output/announce-stopped.json" ]]; then
+  timeout --kill-after=2s 10s python3 "$bag_output/recording.py" --announce stopped \
+    --report "$bag_output/announce-stopped.json" ||
+    printf '%s\n' 'Stop announcement failed or timed out after launch shutdown' > "$bag_output/announce-stopped-error.txt"
+fi
 # The existing MAVROS process outlives launch. Restore defaults even after a
 # partial request or launch failure; record a failed cleanup instead of hiding it.
 if [[ -f "$bag_output/px4-rate-request.json" ]]; then

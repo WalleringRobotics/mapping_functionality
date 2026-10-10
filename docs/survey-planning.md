@@ -96,6 +96,9 @@ Speed commands with `-1` retain the previous speed. Default-speed resets,
 relative speed changes and airspeed/climb-speed commands are not modelled by the
 PX4 survey estimate and are refused. The maximum commanded speed remains the
 conservative bound used for camera blur and overlap checks.
+Unmodelled execution commands such as jumps, unlimited/counted loiters and delays,
+and items requiring manual continuation, are refused rather than omitted from the
+time budget.
 
 ## 4. Record
 
@@ -114,7 +117,11 @@ wr-map capture --survey-check runs/plans/field-001 --announce \
 - `--announce` sends "recording started" and "recording stopped" as MAVLink status
   text and plays a short tune on the vehicle buzzer. The outcome goes to
   `announce-*.json`. Announcements never stop or fail a recording. The stop notice
-  is sent for timed recordings only.
+  is attempted for timed and operator-stopped recordings. Timed runs wait for the
+  stop announcer after the minimum two-second postroll, with a ten-second deadline.
+  Operator stops attempt it after launch exits and before sealing; keep MAVROS
+  separately owned so the link remains available then. Missing subscribers or a
+  stopped link are recorded in the announcement report, not reported as delivery.
 
 The status text reaches QGroundControl only if PX4 forwards it from the companion
 link to the ground-station link (`MAV_n_FORWARD` on both MAVLink instances). The

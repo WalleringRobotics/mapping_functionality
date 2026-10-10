@@ -286,8 +286,14 @@ def estimate_minutes(home, items, limits, errors, warnings):
         return horizontal / speed
 
     ended = False
+    supported = {16, 19, LAND, TAKEOFF, RETURN_TO_LAUNCH, CHANGE_SPEED, *CAMERA_COMMANDS}
     for item in items:
         command = item["command"]
+        if command not in supported:
+            errors.append(f"Item {item['mission_seq']} has unsupported mission command {command}")
+            continue
+        if item["auto_continue"] is not True:
+            errors.append(f"Item {item['mission_seq']} has an unbounded manual continuation")
         if command == CHANGE_SPEED:
             p = item["params"]
             requested = finite(p[1], "Commanded groundspeed")

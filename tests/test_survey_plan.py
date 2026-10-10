@@ -210,3 +210,20 @@ def test_time_estimate_refuses_unmodelled_speed_commands(tmp_path, params):
     report = check_survey(write_plan(tmp_path / 'speed.plan', plan), CAMERA, PROFILE, 15)
     assert not report['passed']
     assert any('absolute groundspeed' in error for error in report['errors'])
+
+
+@pytest.mark.parametrize('command', [177, 17, 18, 93, 400])
+def test_time_estimate_refuses_unmodelled_execution_commands(tmp_path, command):
+    plan = survey_plan()
+    plan['mission']['items'].insert(-1, simple(99, command, 2, [2, 10, 0, 0, 0, 0, 0]))
+    report = check_survey(write_plan(tmp_path / 'control.plan', plan), CAMERA, PROFILE, 15)
+    assert not report['passed']
+    assert any(f'unsupported mission command {command}' in error for error in report['errors'])
+
+
+def test_manual_continuation_cannot_have_a_bounded_flight_time(tmp_path):
+    plan = survey_plan()
+    plan['mission']['items'][0]['autoContinue'] = False
+    report = check_survey(write_plan(tmp_path / 'manual.plan', plan), CAMERA, PROFILE, 15)
+    assert not report['passed']
+    assert any('manual continuation' in error for error in report['errors'])

@@ -13,7 +13,7 @@ pytest.importorskip('launch')
 pytest.importorskip('launch_ros')
 
 
-@pytest.mark.parametrize('mode', ['timed', 'interrupt', 'calibration_interrupt', 'driver_failure', 'recorder_failure', 'preflight_failure', 'announce'])
+@pytest.mark.parametrize('mode', ['timed', 'interrupt', 'calibration_interrupt', 'driver_failure', 'recorder_failure', 'preflight_failure', 'announce', 'announce_interrupt'])
 def test_launch_owns_children_and_only_clean_recordings_are_sealed(tmp_path, mode):
     real_ros2 = shutil.which('ros2')
     assert real_ros2
@@ -60,7 +60,7 @@ if Path(sys.argv[0]).name == 'camera_node' or args[:2] == ['bag', 'record']:
 elif args[:2] == ['param', 'dump']:
     print('/oak: {ros__parameters: {}}')
 elif args[:2] == ['topic', 'echo']:
-    if mode == 'announce' and '/mavros/state' in args:
+    if mode.startswith('announce') and '/mavros/state' in args:
         print('connected: true')
     sys.exit(4 if mode == 'preflight_failure' else 0)
 elif args[:2] == ['bag', 'info']:
@@ -78,18 +78,19 @@ elif args[:2] == ['bag', 'info']:
     if mode == 'calibration_interrupt':
         command[-1] = '110'
         command.extend(['--kind', 'calibration'])
-    if mode == 'announce':
+    if mode.startswith('announce'):
         # No MAVROS subscribers exist: announcements time out without affecting the recording.
         command.remove('--camera-only')
-        command[-1] = '3'
+        command[-1] = '3' if mode == 'announce' else '0'
         command.append('--announce')
     process = subprocess.Popen(command,
         env=env, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        if mode in {'interrupt', 'calibration_interrupt'}:
+        if mode in {'interrupt', 'calibration_interrupt', 'announce_interrupt'}:
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                marker = 'calibration-phases.json' if mode == 'calibration_interrupt' else 'acquisition-start-ns.txt'
+                marker = ('calibration-phases.json' if mode == 'calibration_interrupt' else
+                          'announce-started.json' if mode == 'announce_interrupt' else 'acquisition-start-ns.txt')
                 if (output / marker).exists():
                     break
                 if process.poll() is not None:
@@ -115,7 +116,7 @@ elif args[:2] == ['bag', 'info']:
                 phases = json.loads((output / 'calibration-phases.json').read_text())
                 assert phases['phases'][0]['phase'] == 'still_start'
                 assert 'calibration-phases.json' in (output / 'SHA256SUMS').read_text()
-            if mode == 'announce':
+            if mode.startswith('announce'):
                 import json
                 started = json.loads((output / 'announce-started.json').read_text())
                 assert started['event'] == 'started' and not started['statustext']
