@@ -70,7 +70,7 @@ decision.
 | B1 | **Airframe integration is undocumented here.** The vehicle is the Tarot X6 hexacopter from `WalleringRobotics/UAV_Design_Environment`, with a 6.5 kg design weight and 20 minutes hover endurance. The mount, cabling, vibration isolation and centre of gravity of the OAK and Orin are not recorded. | Flight | Operator | Needs a photo, mass, a hover test and a vibration log before any mapping flight |
 | B2 | **No ground-control points or checkpoints.** Without them no absolute accuracy can be claimed. | Accuracy | Operator | Needs targets and a survey-grade GNSS rover or total station |
 | B3 | **RTCM corrections cannot reach the receiver yet.** The receiver is RTK-capable, but it is on DroneCAN. PX4 forwards MAVLink RTCM to a DroneCAN receiver only when `UAVCAN_PUB_RTCM=1`, which needs a reboot. The MAVROS `gps_rtk` status topic has never published. | RTK | Operator approval, then agent | Writing a persistent PX4 parameter needs the operator's approval. Verified in PX4 v1.17 source: `src/drivers/uavcan/sensors/gnss.cpp` maps DroneCAN RTK fixed to fix type 6 |
-| B4 | **No correction source is chosen.** No NTRIP caster, mount point or surveyed base exists in configuration. | RTK | Operator decision | The repository's NTRIP bridge supports a **single-base mount only**. VRS or network mounts that need the rover's GGA position are not supported. A national CORS single-station mount gives datum-tied corrections; a self-surveyed base does not |
+| B4 | **No correction source is chosen.** No NTRIP caster, mount point or surveyed base exists in configuration. | RTK | Operator decision | SAPOS Bayern offers only VRS mounts, which need the rover's GGA position; the bridge supports a single-base mount only and would need a VRS mode. An own RTKBase station on a second F9P works with the bridge as it is. See section 5 |
 | B5 | **Rig calibration is unmeasured.** No guided session (#8), no real solves (#9, #10), no tape-measured lever arms. | Direct georeferencing; survey gate | Operator, then agent | About one bench hour plus solver review |
 | B6 | **PX4 timing almost never meets the qualification gate.** The gate needs 501 consecutive TIMESYNC samples, about 50 s, each with RTT under 10 ms and residual at most 2 ms. The 20-minute soak qualified 26 of 11,999 samples. The 20 fps candidate qualified none. | Every capture's timing qualification, so every image stays unqualified for geolocation | Agent, then operator decision | The offset itself looks good: residual p95 is 1.1 ms. Rare RTT outliers reset the streak. Options are to find the outlier source or to change the gate so isolated outliers are rejected rather than resetting it |
 | B7 | **RGB is rolling shutter and its readout time is unmeasured** (#14). Motion skews the image during readout. | Map quality when moving | Agent and operator | Fly slowly at first. Process the global-shutter left mono stream as a comparison. Use ODM rolling-shutter correction with a stated readout time |
@@ -80,6 +80,7 @@ decision.
 | B11 | **x86 workstation not provisioned** for real data. PR #24 is proven in CI only. | Processing | Operator | Docker plus the pinned ODM image; about 300 GiB per flight of scratch space |
 | B12 | **The PX4 SIH mission check fails in CI** on every push of PR #24. No simulated mission has completed end to end. | Simulator acceptance of any mission (#16); confidence before flight | Agent | Debug from the uploaded `px4-sih-evidence` artifact |
 | B13 | **No survey planner is connected.** Nothing turns a field boundary into a flight plan that matches the camera, frame rate and endurance, or links a flown plan to its recording. | Planning any mapping flight | Agent | Section 5 proposes the connection |
+| B14 | **No ground-station telemetry link is chosen.** The vehicle design lists telemetry as "TBD (LTE/SiK)". QGC needs a link to monitor the mission in flight. | Flight | Operator decision | MAVROS can relay MAVLink to QGC over an Orin network link, or a SiK radio can connect to the Pixhawk's second telemetry port |
 
 Not blockers for a first flight: absolute optical timing (#14), the in-flight
 calibration mission (#16) and the 20 fps default (#13). They matter for direct
@@ -148,7 +149,7 @@ Each phase ends at a gate the operator reviews before the next starts. Phases 1A
 
 1. Provision the x86-64 workstation with Docker and the pinned ODM image (`deploy/setup-postprocessing.sh`). Run `wr-map doctor`.
 2. Choose a test site with texture and open sky. Lay out 5–8 GCPs and 3–5 separate checkpoints and survey them, recording CRS, vertical datum and uncertainty.
-3. Choose the correction source (decision 2 in section 5). After approval, set `UAVCAN_PUB_RTCM=1`, reboot, run `wr-map ntrip` and confirm RTK fixed on the ground with the fitted F9P (B3, B4).
+3. Choose the correction source (decision 2 in section 6). If it is SAPOS, an agent first adds a VRS mode to the NTRIP bridge that sends the rover's GGA position. After approval, set `UAVCAN_PUB_RTCM=1`, reboot, run `wr-map ntrip` and confirm RTK fixed on the ground with the fitted F9P (B3, B4).
 4. Record the receiver's uncertainty convention and timestamp mode in the private GNSS profile, as `docs/rtk-accuracy.md` requires.
 
 **Gate:** workstation processes the CI sample; surveyed points exist for the site; RTK fixed is observed with corrections forwarded through MAVROS.
@@ -156,8 +157,9 @@ Each phase ends at a gate the operator reviews before the next starts. Phases 1A
 ### Phase 1C: survey planning connection (agent, about two to three days)
 
 1. Add the QGC custom camera definition and `wr-map survey-check` with tests on QGC-saved plans (section 5).
-2. Bind the checked plan's hash and the mission waypoint list into recordings.
-3. Generalise flight-phase extraction to survey legs, and select only survey-leg images at import.
+2. Report recording state to QGC by status text and a buzzer tune through MAVROS.
+3. Bind the checked plan's hash and the mission downloaded from PX4 into recordings.
+4. Generalise flight-phase extraction to survey legs, and select only survey-leg images at import.
 
 **Gate:** a QGC Survey plan for the test site passes the check; a synthetic or SIH run produces survey-leg windows.
 
@@ -219,52 +221,90 @@ The accuracy estimates in section 3 assume 30 m. At 60 m, the GCP-based figures
 roughly double, to about 3–6 cm horizontal and 5–10 cm vertical. The RTK-based
 figures change less because GNSS error dominates them.
 
-### Recommended connection: QGroundControl Survey plus a plan check
+### Open-source tools to connect to
 
-1. **Plan in QGroundControl.** QGC is PX4's standard ground station, and its Survey
-   item already turns a drawn or KML-imported field polygon into a grid with
-   turnarounds. Enter the OAK RGB as a custom camera: sensor 6.287 × 4.712 mm,
-   image 4056 × 3040 px, focal length 4.79 mm, landscape. Store this camera
-   definition in `configs/` so every operator uses the same values.
-2. **Check the plan against the capture profile.** Add `wr-map survey-check PLAN
-   --profile PROFILE` (agent work). It reads the QGC `.plan` and refuses a plan
-   that breaks any limit: height at most 120 m above ground, forward overlap
-   at the profile's frame rate, blur at the profile's exposure, the target GSD,
-   estimated flight time within the battery budget with reserve, and a geofence
-   being present. QGC's distance-trigger commands are flagged, because the OAK
-   free-runs and nothing on the vehicle consumes them.
-3. **Bind the plan to the recording.** The checked plan's hash and its item map go
-   into the session. The recorder already keeps `/mavros/mission/reached`; add the
-   mission waypoint list as well. Start and stop recording on mission start and
-   end, which also closes most of B10.
-4. **Use the plan in processing.** Generalise the sealed flight-phase extraction
-   used by `calibrate-flight-phases` to survey legs. Import only images taken on
-   survey legs, which drops turns and transit and cuts data volume. The processing
-   report then compares achieved overlap and GSD with the plan.
-5. **Rehearse in simulation.** Fly the checked plan in PX4 SIH once B12 is fixed,
-   and record the downloaded mission, as `docs/calibration-mission.md` already
-   requires for the calibration plan.
+The aim is to write as little UI as possible. Each job below already has a maintained
+open-source tool; this repository should supply configuration, checks and the
+links between them. Licences matter because this repository is Apache-2.0: AGPL
+and GPL tools are run as separate programs or services, never imported or vendored.
+Activity and versions were checked on 2026-10-10.
 
-**Alternative: generate the survey ourselves.** A `wr-map survey-plan --area
-field.kml` command could write the QGC plan directly, reusing the calibration
-mission writer. It is fully reproducible from parameters, but it has no map editor
-and duplicates a mature QGC feature. Choose it only if QGC's Survey output cannot
-meet the checks. ArduPilot Mission Planner is not recommended for a PX4 vehicle.
+**Mission planning**
+
+| Tool | Licence | Fit | Verdict |
+|---|---|---|---|
+| [QGroundControl](https://docs.qgroundcontrol.com/Stable_V5.0/en/qgc-user-guide/plan_view/pattern_survey.html) 5.1.5 | Apache-2.0 / GPL-3.0 | PX4's reference ground station. Survey, corridor and structure scans; custom camera by sensor size, resolution and focal length; KML and SHP polygon import; terrain following; geofence. Writes a documented JSON `.plan` | **Use as the planner and flight UI** |
+| [ArduDeck](https://ardudeck.com/) beta 1.1 | GPL-3.0 | New cross-platform station with GSD-first survey planning, camera presets and a German surveying partner. PX4 support is labelled experimental | Watch; not for a first flight |
+| ArduPilot Mission Planner | GPL-3.0 | Mature survey grid, but Windows-first and built around ArduPilot | Not for a PX4 vehicle |
+| [Drone Tasking Manager](https://github.com/hotosm/drone-tm) `drone-flightplan` 1.0.0 | AGPL-3.0 | Python flight-plan generator from a GeoJSON area with terrain following. Exports QGC `.plan` as plain waypoints. Its QGC camera values are hardcoded DJI placeholders marked FIXME | Only if plans must be generated in scripts; contribute a custom-camera input upstream first |
+| [Fields2Cover](https://github.com/Fields2Cover/Fields2Cover) | BSD-3-Clause | Field coverage-path library for ground vehicles: headlands, swaths, turns | Not needed: a multicopter has no turning-radius or headland constraint |
+
+**Vehicle link and operator feedback**
+
+| Tool | Licence | Use here |
+|---|---|---|
+| MAVROS `gcs_url` | GPL-3.0, LGPL-3.0 or BSD | MAVROS already owns the PX4 serial link. Its built-in GCS bridge can relay MAVLink to QGC over the Orin's network, so no second serial owner is needed |
+| [mavlink-router](https://github.com/mavlink-router/mavlink-router) | Apache-2.0 | Alternative if several programs need the link and the MAVROS bridge is not enough |
+| MAVROS `sys_status` status text and `play_tune` | GPL-3.0, LGPL-3.0 or BSD | Send "recording started" and fault messages to QGC's message panel and play a tune on the vehicle buzzer. Both plugins are in the current image. This covers most of B10 without a new UI |
+| MAVROS `cam_imu_sync` | GPL-3.0, LGPL-3.0 or BSD | Records PX4's camera-trigger events for later distance triggering. In the current image |
+| [MAVSDK](https://github.com/mavlink/MAVSDK) `MissionRaw.import_qgroundcontrol_mission` | BSD-3-Clause | Parses QGC `.plan` files, including surveys, into mission items. Useful as a reference parser for `survey-check`; not needed for upload, which QGC does |
+
+**Corrections and ground truth**
+
+| Tool or service | Licence or terms | Use here |
+|---|---|---|
+| SAPOS Bayern HEPS | Paid registration with LDBV | 1–2 cm horizontal and 2–3 cm vertical in official ETRS89. The central caster offers **VRS mounts only** (`VRS_3_4G`, `VRS_3_2G`), and VRS requires the rover's NMEA GGA position. The repository's NTRIP bridge does not send GGA, and its fixed-base coordinate check does not fit a virtual station. Using SAPOS needs a VRS mode in the bridge |
+| [RTKBase](https://github.com/Stefal/rtkbase) | AGPL-3.0 | Web-managed base station on a single-board computer with a second ZED-F9P. Serves a single-base NTRIP mount the current bridge already supports, logs raw data for PPK of the base, and works without mobile coverage at the field. Its coordinates must be tied to ETRS89, for example by a SAPOS-corrected occupation |
+| RTKLIB `str2str` | BSD-2-Clause | Command-line NTRIP client and server, a fallback for relaying corrections |
+| QGIS and QField | GPL-2.0+ | Draw or import field boundaries as KML or SHP for QGC, and manage GCP and checkpoint coordinates |
+
+**Processing and review**
+
+| Tool | Licence | Use here |
+|---|---|---|
+| [WebODM](https://github.com/WebODM/WebODM) and NodeODM | AGPL-3.0 | Browser UI for ODM tasks, results, measurements and the built-in GCP interface. Point it at a NodeODM running the same pinned ODM 3.6.2 image. Keep this repository's audited CLI as the path of record and use WebODM for viewing and GCP tagging |
+| [PyODM](https://github.com/OpenDroneMap/PyODM) | BSD-3-Clause | Python client for NodeODM, if this repository should submit tasks to a shared NodeODM server |
+| GCP Editor Pro | Fair Source 0.9, not open source | Faster GCP tagging, but its licence limits use; prefer WebODM's built-in interface |
+| [Lichtblick](https://github.com/lichtblick-suite/lichtblick) | MPL-2.0 | Open-source continuation of Foxglove Studio for browsing MCAP recordings: images, IMU, GNSS and mission progress on one timeline |
+| [PlotJuggler](https://github.com/facontidavide/PlotJuggler) | MPL-2.0 | Time-series plots from MCAP and PX4 ULog, useful for calibration and TIMESYNC review |
+| [PX4 Flight Review](https://github.com/PX4/flight_review) | BSD-3-Clause | Standard ULog analysis, including the vibration check for B1 |
+| QGIS and CloudCompare | GPL | Inspect orthophotos, DSMs and point clouds |
+
+### Recommended connection
+
+1. **Plan and fly in QGroundControl Survey.** Store the OAK RGB custom camera in
+   `configs/`: sensor 6.287 × 4.712 mm, image 4056 × 3040 px, focal length
+   4.79 mm, landscape. Import field boundaries as KML or SHP from QGIS.
+2. **Add `wr-map survey-check PLAN --profile PROFILE`.** It refuses a plan that
+   breaks a limit: height at most 120 m above ground, forward overlap at the
+   profile's frame rate, blur at its exposure, the target GSD, flight time within
+   the battery budget with reserve, and a geofence. It flags QGC's distance-trigger
+   commands, because the OAK free-runs and nothing on the vehicle uses them yet.
+3. **Bind the plan to the recording.** Store the checked plan's hash in the session
+   and record the mission downloaded from PX4 and `/mavros/mission/reached`.
+   Start and stop recording with the mission. Report recording state to QGC by
+   status text and the buzzer tune.
+4. **Use the plan in processing.** Generalise the sealed flight-phase extraction to
+   survey legs and import only survey-leg images. Compare achieved overlap and GSD
+   with the plan. Review results in WebODM, Lichtblick and Flight Review.
+5. **Rehearse in simulation.** Fly the checked plan in PX4 SIH once B12 is fixed.
 
 **Later option: distance triggering.** PX4 can trigger the camera by distance and
-send the trigger events to the Orin. Capturing only the frames the plan needs would
-cut the 4.4 GiB per minute data volume (B8) by a large factor. It needs a trigger
-path into the OAK driver, so it belongs after the first flight.
+publish trigger events, which `cam_imu_sync` already records. Capturing only the
+frames the plan needs would cut the 4.4 GiB per minute data volume (B8) by a large
+factor. It needs a trigger path into the OAK driver, so it belongs after the first
+flight.
 
 ## 6. Decisions needed from the operator
 
 1. **RTK parameter.** The receiver is answered: an H-RTK F9P Helical is fitted. May an agent set `UAVCAN_PUB_RTCM=1` on the Pixhawk 6X? It is persistent and needs a reboot.
-2. **Corrections.** Which NTRIP caster and single-base mount point, or a surveyed base of our own?
+2. **Corrections.** SAPOS Bayern VRS, which is paid and needs a VRS mode in the bridge, or an own RTKBase base station on a second F9P, which needs a surveyed point?
 3. **Accuracy target.** What horizontal and vertical accuracy does the first deliverable need? That decides whether GCPs alone are enough.
 4. **Airframe.** The Tarot X6 is known from the design repository. How are the OAK and Orin mounted and isolated, and what payload margin remains with the chosen battery?
 5. **Site.** Where is the first test site, and what flight approvals apply?
 6. **Flight profile.** Accept 12 MP lossless at 2 fps (about 4.4 GiB/min) for the first flight, or prefer the smaller 4K scaled stream?
 7. **Timing gate.** Should the 501-consecutive-sample gate stay as it is, or may it reject isolated outliers? The soak shows the gate, not the offset quality, is what fails.
-8. **Planner.** Approve QGroundControl Survey plus our plan check, or prefer a planner generated in this repository?
+8. **Planner.** Approve QGroundControl Survey plus our plan check, with ArduDeck watched as a later alternative?
 9. **Survey design point.** Is about 2 cm GSD at 60 m acceptable to cover 10 ha per sortie, or is 1 cm GSD worth three sorties per field?
 10. **Ground station.** Which laptop and QGC version will the operator plan and fly with?
+11. **Telemetry link.** LTE or Wi-Fi through the Orin with MAVROS relaying to QGC, or a SiK radio on the Pixhawk?
