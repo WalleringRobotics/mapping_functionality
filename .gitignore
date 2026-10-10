@@ -1,5 +1,6 @@
 .venv/
 .venv-postprocess/
+.claude/worktrees/
 __pycache__/
 *.py[cod]
 *.egg-info/
