@@ -7,6 +7,7 @@ from ruamel.yaml import YAML
 from qgc_plans import survey_plan, write_plan
 from wallering_mapping.cli import main
 from wallering_mapping.survey_plan import check_survey, load_plan, write_check
+from wallering_mapping.recording import verify_survey
 
 REPO = Path(__file__).resolve().parents[1]
 CAMERA = REPO / "configs/qgc-oak-rgb-12mp.json"
@@ -139,6 +140,14 @@ def test_checked_plan_is_copied_exactly_and_never_replaced(tmp_path):
     assert saved["plan"]["sha256"] == report["plan"]["sha256"]
     with pytest.raises(FileExistsError):
         write_check(path, tmp_path / "checked", report)
+    assert verify_survey(output, PROFILE) == report["plan"]["sha256"]
+    changed = tmp_path / "changed.yaml"
+    changed.write_bytes(PROFILE.read_bytes() + b"\n# different active profile\n")
+    with pytest.raises(ValueError, match="Active capture profile"):
+        verify_survey(output, changed)
+    path.write_text(path.read_text() + "\n")
+    with pytest.raises(ValueError, match="Plan changed"):
+        write_check(path, tmp_path / "changed-plan", report)
 
 
 def test_cli_exit_status_follows_the_check(tmp_path, capsys):

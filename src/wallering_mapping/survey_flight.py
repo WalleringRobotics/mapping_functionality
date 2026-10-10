@@ -41,9 +41,28 @@ def compare_mission(items, waypoints):
         if int(waypoint["command"]) != item["command"]:
             differences.append(f"item {seq} command {waypoint['command']} != {item['command']}")
             continue
+        if FRAME_CLASSES.get(int(waypoint["frame"])) != FRAME_CLASSES.get(item["frame"]):
+            differences.append(f"item {seq} altitude frame differs")
+        if waypoint.get("auto_continue") is not item.get("auto_continue"):
+            differences.append(f"item {seq} auto-continue differs")
+        for index, expected in enumerate(item["params"][:4], 1):
+            actual = waypoint.get(f"param{index}")
+            if expected is None:
+                if actual is not None and not math.isnan(actual):
+                    differences.append(f"item {seq} param{index} differs")
+            elif actual is None or not math.isfinite(actual):
+                differences.append(f"item {seq} param{index} missing/nonfinite")
+            else:
+                delta = actual - expected
+                if index == 4 and item["command"] in POSITIONAL_COMMANDS:
+                    delta = (delta + 180) % 360 - 180
+                if abs(delta) > max(1e-5, abs(expected) * 1e-6):
+                    differences.append(f"item {seq} param{index} differs")
         if item["command"] in POSITIONAL_COMMANDS and "lat" in item:
-            if FRAME_CLASSES.get(int(waypoint["frame"])) != FRAME_CLASSES.get(item["frame"]):
-                differences.append(f"item {seq} altitude frame differs")
+            if not all(type(waypoint.get(k)) in (int, float) and math.isfinite(waypoint[k])
+                       for k in ("x_lat", "y_long", "z_alt")):
+                differences.append(f"item {seq} nonfinite navigation coordinate")
+                continue
             if (abs(waypoint["x_lat"] - item["lat"]) > POSITION_TOLERANCE_DEG
                     or abs(waypoint["y_long"] - item["lon"]) > POSITION_TOLERANCE_DEG):
                 differences.append(f"item {seq} position differs")
@@ -65,6 +84,8 @@ def bound_check(root, check):
     else:
         raise ValueError("No survey plan is bound to this recording; pass --check")
     report = json.loads((directory / "survey-check.json").read_text())
+    from .recording import verify_survey
+    verify_survey(directory)
     plan_hash = sha256_file(directory / "survey.plan")
     if report.get("kind") != "survey_plan_check" or report.get("plan", {}).get("sha256") != plan_hash:
         raise ValueError("survey.plan differs from the plan that was checked")
@@ -84,7 +105,10 @@ def read_mission_topics(root):
             if connection.topic == WAYPOINTS:
                 lists.append({"receipt_ns": int(receipt), "current_seq": int(message.current_seq),
                               "waypoints": [{"frame": int(w.frame), "command": int(w.command),
+                                             "auto_continue": bool(w.autocontinue),
                                              "x_lat": float(w.x_lat), "y_long": float(w.y_long),
+                                             **{f"param{i}": float(getattr(w, f"param{i}"))
+                                                for i in range(1, 5)},
                                              "z_alt": float(w.z_alt)} for w in message.waypoints]})
             else:
                 events.append({"ordinal": len(events), "mission_seq": int(message.wp_seq),
@@ -98,6 +122,8 @@ def verify_numbering(items, lists, events):
         return False, [], ["No vehicle mission list was recorded; leg numbering is unverified"]
     start = events[0]["receipt_timestamp_ns"] if events else math.inf
     before = [index for index, row in enumerate(lists) if row["receipt_ns"] <= start]
+    if events and not before:
+        return False, [], ["No vehicle mission list was recorded before the first reached event"]
     first = before[-1] if before else 0
     errors, compared = [], []
     seen = set()
@@ -123,7 +149,10 @@ def extract_survey_legs(root, output, check=None):
         raise ValueError("Recording did not finish cleanly")
     source_seal = sha256_file(root / "SHA256SUMS")
     directory, report, plan_hash = bound_check(root, check)
-    loaded = load_plan(directory / "survey.plan", report["inputs"]["limits"]["match_tolerance_m"])
+    loaded = load_plan(directory / "survey.plan", report["inputs"]["limits"]["match_tolerance_m"],
+                       platform=report.get("platform", "px4_multirotor"))
+    if loaded["errors"]:
+        raise ValueError("Bound plan is unsupported: " + "; ".join(loaded["errors"]))
     items, legs = loaded["items"], loaded["legs"]
     lists, events = read_mission_topics(root)
     verified, compared, errors = verify_numbering(items, lists, events)
@@ -167,6 +196,8 @@ def extract_survey_legs(root, output, check=None):
     result = {"schema_version": 1, "kind": "survey_legs", "status": "complete", "passed": passed,
               "numbering_verified": verified, "source_seal_sha256": source_seal, "sealed_files": sealed,
               "plan_sha256": plan_hash, "plan_source": "session" if directory == root else str(directory),
+              "profile_hashes": {key: value for key, value in report["inputs"].items()
+                                 if key.endswith("_sha256")},
               "errors": errors, "warnings": warnings, "vehicle_missions": compared,
               "events": events, "legs": rows, "survey_ready": False,
               "limitations": [

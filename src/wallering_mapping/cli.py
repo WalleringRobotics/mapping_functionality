@@ -194,6 +194,14 @@ def parser():
     survey_check = commands.add_parser("survey-check",
                                        help="Check a QGroundControl Survey plan against the capture profile")
     survey_arguments(survey_check)
+    handoff = commands.add_parser("handoff-check", help="Audit design camera and capture budgets offline")
+    handoff.add_argument("handoff", type=Path)
+    handoff.add_argument("--output", type=Path, required=True)
+    events = commands.add_parser("event-check", help="Audit normalized exposure edges and camera counters offline")
+    events.add_argument("frames", type=Path)
+    events.add_argument("edges", type=Path)
+    events.add_argument("--timing", type=Path, required=True)
+    events.add_argument("--output", type=Path, required=True)
     from .survey_flight import add_arguments as legs_arguments
     survey_legs = commands.add_parser("survey-legs", help="Survey-leg windows from a sealed survey recording")
     legs_arguments(survey_legs)
@@ -216,6 +224,16 @@ def main(argv=None):
         elif args.command == "calibrate-flight-phases":
             from .calibration_flight import run
             result = run(args)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "event-check":
+            from .exposure_events import check_events
+            result = check_events(args.frames, args.edges, args.timing, args.output)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "handoff-check":
+            from .capabilities import check_handoff
+            result = check_handoff(args.handoff, args.output)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
         elif args.command == "survey-check":

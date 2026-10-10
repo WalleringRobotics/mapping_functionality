@@ -1,5 +1,9 @@
 # Survey planning with QGroundControl
 
+The default workflow below is OAK/PX4. The explicit ArduPilot Plane path uses
+`--handoff` and `--aircraft-limits`; see [the wing contract](survey-wing.md) for
+its conservative supported subset and remaining acceptance.
+
 QGroundControl's Survey pattern is the planner and the flight UI. This repository
 does not draw grids. It checks the saved plan against the OAK capture profile, binds
 the checked plan to the recording, verifies the mission PX4 actually holds, and

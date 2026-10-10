@@ -1,5 +1,39 @@
 # Camera upgrades and delivery roadmap
 
+## Open-issue continuation, 2026-10-10
+
+Local integration builds on the OpenSfM/ODM continuation (PR #24) and the existing
+QGroundControl survey connection (PR #26). The new requests use the design
+repository's actual v1 handoff. No issue is closed by this software continuation;
+physical and simulator acceptance below remains explicit.
+
+| Issue | Progress in this continuation | Remaining acceptance |
+|---|---|---|
+| [#7](https://github.com/WalleringRobotics/mapping_functionality/issues/7), PX4 rate/timing | Separate RTT/residual rejection counts and interrupted-streak diagnostics without changing the qualification rule; reconciled stored before/after evidence | Matched 60 s baseline/request windows with qualified timing and source continuity; current candidate has zero qualified timing samples in both windows |
+| [#8](https://github.com/WalleringRobotics/mapping_functionality/issues/8), guided recording | Integrated survey recorder changes while retaining the no-daemon discovery fix; calibration lifecycle and phase tests remain part of image validation | Actual props-off guided moving-rig recording, requested rates, complete seal and audit |
+| [#9](https://github.com/WalleringRobotics/mapping_functionality/issues/9), IMU solver | Existing solver regression coverage retained; timing diagnostics expose rejected input windows | Real multi-axis session, independent-segment agreement and review |
+| [#10](https://github.com/WalleringRobotics/mapping_functionality/issues/10), camera solver | Stereo/tracking/degeneracy coverage retained; nominal wing camera geometry cannot substitute for this calibration | Real left/right agreement and measured mounting comparison |
+| [#12](https://github.com/WalleringRobotics/mapping_functionality/issues/12), drift | Existing drift/insufficient-motion coverage retained; no automatic calibration mutation | Real moving session validated against its reviewed calibration |
+| [#13](https://github.com/WalleringRobotics/mapping_functionality/issues/13), 20 fps | Documented stored 1200 s default-profile and 60 s candidate audits; new camera budgets refuse incompatible payload rates | Candidate 20-minute soak, RGB within requested-rate tolerance, storage/thermal evidence; default remains 2 fps |
+| [#14](https://github.com/WalleringRobotics/mapping_functionality/issues/14), optical timing | Offline explicit-counter/edge audit with full GPS weeks, reset/ambiguity refusal, independent delay/duration uncertainty and retained unmatched evidence | Real instrumented OAK optical/row timing and target observations; fixtures are not physical timing evidence |
+| [#15](https://github.com/WalleringRobotics/mapping_functionality/issues/15), umbrella | This table reconciles all 12 open issues and pending integration work | Each measured-acceptance issue must meet its own gate |
+| [#16](https://github.com/WalleringRobotics/mapping_functionality/issues/16), flight calibration | Inspected latest `b8e48cc` CI evidence: abort passes; mission takes off and lands but lacks four reached events. Strengthened mission matching and pre-progress numbering evidence | Resolve missing reached-event evidence; QGC load/save, simulator recorder/solver pipeline, then reviewed flight |
+| [#18](https://github.com/WalleringRobotics/mapping_functionality/issues/18), IMU continuity | Audits distinguish nominal count deficit from interval-inferred gaps and flag disagreement; jitter regression proves complete counts are not evidence of hardware loss | Hardware continuity evidence and accepted 20-minute runs at both profiles |
+| [#27](https://github.com/WalleringRobotics/mapping_functionality/issues/27), camera/event platform | Handoff consumer, nominal camera export, recomputed link/storage/geometry gates, normalized counter/event audit and producer-export fixture | Vendor GigE driver, exact pixel/calibration import, raw UBX/PPK, generalized measured rig frames, failure/soak tests on each compute/storage variant |
+| [#28](https://github.com/WalleringRobotics/mapping_functionality/issues/28), Plane survey | Explicit Plane option in QGC checker: home numbering, separate air/groundspeed with wind, stall/bank/turn constraints, path/fence checks, terrain refusal, reserve and profile hashes; selection provenance propagation | Real QGC/Mission Planner Plane fixtures and MP parser, Plane SITL with recorder/abort, active GigE capture binding, reviewed flight |
+
+See [the wing integration contract](survey-wing.md) and
+[the stored evidence review](hardware-acceptance.md#stored-soak-and-ci-evidence-reviewed-2026-10-10).
+OAK defaults, measured-calibration requirements and physical qualification gates
+remain in force. Upload, arming and persistent parameters remain operator actions.
+
+Validation: 476 tests passed in the pinned `wallering-mapping:humble` image,
+followed by 50 passing mission/Plane tests after the final mission-matching edits.
+Ruff, shell syntax and whitespace checks also passed. Logs are under ignored
+`runs/open-issues-20261010/` (`full-suite-final.txt` and
+`final-mission-checks.txt`). These software checks supply no new physical or
+simulator qualification evidence.
+
 ## Acceptance milestones
 
 Status as of 2026-10-04; evidence is in [hardware acceptance](hardware-acceptance.md).
@@ -7,7 +41,7 @@ Status as of 2026-10-04; evidence is in [hardware acceptance](hardware-acceptanc
 | Milestone | Evidence required | Current state |
 |---|---|---|
 | M0: software foundation | IO fixtures, corruption/failure tests, command plans | Done; 333 tests passed in the repository image at the merged handoff; continuation acceptance checks below |
-| M1: Orin/OAK bench capture | Inventory; reproducible runtime; 20-minute capture; stop/fault checks | ROS/MCAP stack and Docker image verified on 60 s runs with PX4, Ctrl+C and `docker stop`; 20-minute soak, service path and fresh-Orin preparation pending |
+| M1: Orin/OAK bench capture | Inventory; reproducible runtime; 20-minute capture; stop/fault checks | Default-profile 20-minute audit documented in the 2026-10-10 review; continuity/timing limits, candidate soak, service path and fresh-Orin preparation remain |
 | M2: static building reconstruction | Connected sparse model, dense result, scale/control and held-out checks | Bench bag imports and prepares (`--prepare-only`); no reconstruction executed |
 | M3: terrain product | GCP/CRS-verified ODM product and independent accuracy report | Calibrated runner implemented; real survey acceptance pending |
 | M4: moving platform capture | Blur, vibration, exposure timing, power and throughput acceptance | Not demonstrated; blocked on timing and camera-to-body calibration |

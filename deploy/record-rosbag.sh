@@ -51,7 +51,7 @@ if [[ -n "$bag_survey" ]]; then
   [[ "$bag_camera_only" == false && "$bag_kind" == survey ]] || {
     echo "A survey plan needs PX4 telemetry and a survey recording" >&2; exit 2; }
   bag_survey="$(realpath "$bag_survey")"
-  bag_survey_sha="\"$(python3 "$bag_repo/src/wallering_mapping/recording.py" --verify-survey "$bag_survey")\"" || {
+  bag_survey_sha="\"$(python3 "$bag_repo/src/wallering_mapping/recording.py" --verify-survey "$bag_survey" --profile "$bag_config")\"" || {
     echo "Use a plan that passed wr-map survey-check" >&2; exit 2; }
 fi
 if [[ "$bag_announce" == true && "$bag_camera_only" == true ]]; then

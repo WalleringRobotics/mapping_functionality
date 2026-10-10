@@ -4,6 +4,45 @@ See the [command guide](hardware-commands.md) for the complete reproducible comm
 set and passive serial diagnostics, and the
 [repository skill](../skills/jetson-mapping-checks/SKILL.md) for future agent sessions.
 
+## Stored soak and CI evidence reviewed 2026-10-10
+
+This is a read-only review of existing October 4 reports, not a fresh hardware
+capture or a rerun of the full bag audit. Original sessions and reports were
+preserved. The stored audit
+`runs/hardware-continuation-20261004/default-soak-003-audit-claude.json`
+has SHA-256 `b375053f5e8b2b14e57dd88d31dfb13d056c6ba174fc1f42ab485ba24bfe0e97`.
+
+| Acquisition window | Stored result |
+|---|---|
+| Duration/status | 1200.011 s; valid, capture-ready and coverage-complete; survey-ready false |
+| RGB / mono | 2399 / 2400 frames per mono camera; no interior image gaps; approximately 2 Hz |
+| OAK gyro timestamps | 239,825 samples; 199.853 Hz; 177 nominal count deficit (0.07375%); 4 interval gaps, longest 15.243 ms; hardware loss unknown |
+| PX4 raw IMU / pose | Approximately 50 Hz / 30 Hz; this soak does not qualify the 100 Hz request |
+| Acquisition TIMESYNC | 26 qualified out of 11,999; RTT p95 5.640 ms, maximum 21.816 ms; residual p95 1.118 ms |
+| MAVLink source | 18 inferred sequence gaps and 18 reorders/resets; neither proves sensor sample loss |
+
+The 60.005 s candidate report
+`runs/capture-agent-20261004/candidate-short-003-audit.json` has SHA-256
+`37ca4cec8f918968220e05b383174c9d5d110d181041beb22d257294f0ebed50`.
+Mono is 20.000 Hz, OAK IMU 199.871 Hz and PX4 raw IMU 100.004 Hz. RGB is 2.029 Hz,
+outside a ±1% bound around its 2 Hz request. Neither its 600-sample acquisition
+TIMESYNC window nor its shorter 225-sample baseline has qualified samples.
+The PX4 audit has 499 interval-inferred missing samples but only one nominal
+count deficit: these are different diagnostics, not 499 proven hardware drops.
+New audits label that distinction and report TIMESYNC streak rejection causes;
+the acceptance rule is unchanged. This short candidate does not satisfy #13/#18.
+
+The latest upstream simulator run for PR #24,
+[CI run 37214470816](https://github.com/WalleringRobotics/mapping_functionality/actions/runs/37214470816)
+at `b8e48cc`, was downloaded into
+`runs/open-issues-20261010/px4-ci-b8e48cc/`. Its abort report **passes**, including
+observed Hold followed by landing/disarming. Its mission report records takeoff,
+8400 position samples and landing/disarming, but **fails** because navigation
+items 0, 25, 34 and 35 have no recorded `MISSION_ITEM_REACHED`. Their completion
+must not be inferred merely from later sequence numbers. The missing-event cause
+and recorder/solver pipeline remain unresolved under #16; no simulator success
+or new physical flight is claimed.
+
 **Update 2026-10-04:** The stack runs in the repository Docker image (verified below). BNO086 firmware is now 3.9.9. The default stack uses the
 official Luxonis ROS driver, MAVROS and standard rosbag2/MCAP. The final bench
 recording passes integrity and requested-window coverage at 2 fps and a 100 Hz

@@ -117,7 +117,7 @@ def camera_calc(survey, errors):
     return calc
 
 
-def flatten(plan, errors, tolerance_m):
+def flatten(plan, errors, tolerance_m, include_home=False):
     """Return PX4 mission items in upload order, each labelled with its survey role.
 
     QGroundControl's PX4 plugin does not upload the planned home, so the first plan
@@ -125,6 +125,10 @@ def flatten(plan, errors, tolerance_m):
     vehicle reports, never assumed for qualification.
     """
     items, surveys, legs = [], [], []
+    if include_home:
+        home = plan["mission"]["plannedHomePosition"]
+        items.append(simple({"command": 16, "frame": 0, "autoContinue": True,
+                             "params": [0, 0, 0, 0, *home]}, 0, -1, None, "home"))
     for index, entry in enumerate(plan["mission"]["items"]):
         kind = entry.get("type")
         if kind == "SimpleItem":
@@ -160,10 +164,11 @@ def simple(item, seq, plan_index, survey_index, origin):
     if not isinstance(params, list) or len(params) != 7:
         raise ValueError(f"Mission item at plan index {plan_index} lacks seven params")
     command = item.get("command")
-    if not isinstance(command, int):
+    if type(command) is not int:
         raise ValueError(f"Mission item at plan index {plan_index} has no integer command")
     row = {"mission_seq": seq, "plan_index": plan_index, "survey": survey_index,
            "command": command, "frame": item.get("frame"), "params": params,
+           "auto_continue": item.get("autoContinue"),
            "role": "camera_command" if command in CAMERA_COMMANDS else origin, "transect": None}
     if command in POSITIONAL_COMMANDS and params[4] is not None and params[5] is not None:
         row.update(lat=float(params[4]), lon=float(params[5]),
@@ -226,7 +231,7 @@ def label_survey(survey, items, errors, tolerance_m):
     return legs
 
 
-def load_plan(path, tolerance_m=DEFAULT_LIMITS["match_tolerance_m"]):
+def load_plan(path, tolerance_m=DEFAULT_LIMITS["match_tolerance_m"], *, platform="px4_multirotor"):
     """Parse and label a QGroundControl plan; structural problems become errors."""
     data = Path(path).read_bytes()
     plan = json.loads(data)
@@ -236,15 +241,21 @@ def load_plan(path, tolerance_m=DEFAULT_LIMITS["match_tolerance_m"]):
     mission = plan.get("mission")
     if not isinstance(mission, dict) or mission.get("version") != 2:
         raise ValueError("Plan mission section must be version 2")
-    if mission.get("firmwareType") != PX4_AUTOPILOT:
-        errors.append("Plan was not made for PX4 firmware (firmwareType 12)")
-    if mission.get("vehicleType") not in MULTIROTOR_TYPES:
-        errors.append(f"Plan vehicle type {mission.get('vehicleType')} is not a multirotor")
+    if platform == "px4_multirotor":
+        if mission.get("firmwareType") != PX4_AUTOPILOT:
+            errors.append("Plan was not made for PX4 firmware (firmwareType 12)")
+        if mission.get("vehicleType") not in MULTIROTOR_TYPES:
+            errors.append(f"Plan vehicle type {mission.get('vehicleType')} is not a multirotor")
+    elif platform == "ardupilot_plane":
+        if mission.get("firmwareType") != 3 or mission.get("vehicleType") != 1:
+            errors.append("Plan must explicitly identify ArduPilot Plane (firmwareType 3, vehicleType 1)")
+    else:
+        raise ValueError(f"Unsupported survey platform {platform}")
     home = mission.get("plannedHomePosition")
     if not isinstance(home, list) or len(home) != 3 or not all(
             isinstance(v, (int, float)) and math.isfinite(v) for v in home):
         raise ValueError("Plan needs a finite plannedHomePosition")
-    items, surveys, legs = flatten(plan, errors, tolerance_m)
+    items, surveys, legs = flatten(plan, errors, tolerance_m, platform == "ardupilot_plane")
     if not surveys:
         errors.append("Plan contains no Survey pattern")
     return {"plan": plan, "sha256": sha256_bytes(data), "home": tuple(map(float, home)),
@@ -465,9 +476,12 @@ def check_survey(plan_path, camera_path, profile_path, flight_time_budget_min, l
 
 def write_check(plan_path, output, report):
     """Publish the report beside an exact copy of the checked plan, refusing replacement."""
+    data = Path(plan_path).read_bytes()
+    if sha256_bytes(data) != report["plan"]["sha256"]:
+        raise ValueError("Plan changed after checking")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
-    (output / "survey.plan").write_bytes(Path(plan_path).read_bytes())
+    (output / "survey.plan").write_bytes(data)
     (output / "survey-check.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     return output
 
@@ -476,7 +490,9 @@ def add_arguments(parser):
     parser.add_argument("plan", type=Path, help="Plan saved by QGroundControl")
     parser.add_argument("--camera", type=Path, default=Path("configs/qgc-oak-rgb-12mp.json"))
     parser.add_argument("--profile", type=Path, default=Path("configs/oakd-ros.yaml"))
-    parser.add_argument("--flight-time-budget-min", type=float, required=True,
+    parser.add_argument("--handoff", type=Path, help="Versioned design handoff for ArduPilot Plane")
+    parser.add_argument("--aircraft-limits", type=Path, help="Pack, payload, wind and flight limits for Plane")
+    parser.add_argument("--flight-time-budget-min", type=float,
                         help="Usable flight minutes after the battery reserve")
     parser.add_argument("--output", type=Path, required=True, help="New directory for the checked plan")
     parser.add_argument("--max-height-m", type=float, default=DEFAULT_LIMITS["max_height_m"])
@@ -485,6 +501,15 @@ def add_arguments(parser):
 
 
 def run(args):
+    if args.handoff is not None:
+        from .survey_plane import check_plane, write_plane_check
+        if args.aircraft_limits is None:
+            raise ValueError("Plane checking requires --aircraft-limits")
+        report = check_plane(args.plan, args.handoff, args.aircraft_limits)
+        write_plane_check(args.plan, args.handoff, args.aircraft_limits, args.output, report)
+        return report
+    if args.aircraft_limits is not None or args.flight_time_budget_min is None:
+        raise ValueError("PX4 checking requires --flight-time-budget-min; Plane requires --handoff")
     report = check_survey(args.plan, args.camera, args.profile, args.flight_time_budget_min,
                           {"max_height_m": args.max_height_m, "max_blur_px": args.max_blur_px},
                           args.target_gsd_cm)

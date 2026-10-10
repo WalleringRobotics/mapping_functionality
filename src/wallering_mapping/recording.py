@@ -97,7 +97,7 @@ def ros_rate_request(rate_hz, report):
         rclpy.shutdown()
 
 
-def verify_survey(directory):
+def verify_survey(directory, profile=None):
     """Return the checked plan hash, refusing a failed, foreign or modified check."""
     directory = Path(directory)
     report = json.loads((directory / SURVEY_FILES[0]).read_text())
@@ -108,6 +108,18 @@ def verify_survey(directory):
     digest = hashlib.sha256((directory / SURVEY_FILES[1]).read_bytes()).hexdigest()
     if digest != report.get("plan", {}).get("sha256"):
         raise ValueError("survey.plan differs from the plan that was checked")
+    if profile is not None:
+        if report.get("platform", "px4_multirotor") != "px4_multirotor":
+            raise ValueError("OAK/PX4 recorder cannot capture the proposed Plane/GigE profile")
+        actual = hashlib.sha256(Path(profile).read_bytes()).hexdigest()
+        if actual != report.get("inputs", {}).get("profile_sha256"):
+            raise ValueError("Active capture profile differs from the checked profile; recheck the plan")
+    if report.get("platform") == "ardupilot_plane":
+        for name, key in (("mapping_handoff.json", "handoff_sha256"),
+                          ("aircraft-limits.json", "aircraft_sha256")):
+            actual = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+            if actual != report.get("inputs", {}).get(key):
+                raise ValueError(f"Stale checked profile hash: {name}")
     return digest
 
 
@@ -206,10 +218,11 @@ def main():
     action.add_argument("--pull-mission", action="store_true")
     action.add_argument("--announce", choices=sorted(ANNOUNCEMENTS))
     action.add_argument("--verify-survey", type=Path)
+    parser.add_argument("--profile", type=Path)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.verify_survey:
-        print(verify_survey(args.verify_survey))
+        print(verify_survey(args.verify_survey, args.profile))
         return 0
     if args.report is None:
         parser.error("--report is required")

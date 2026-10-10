@@ -51,8 +51,9 @@ def timeline(items, legs):
 
 
 def recording(tmp_path, checked_dir, *, events=None, lists=None, bind=True):
-    items = load_plan(checked_dir / "survey.plan")["items"]
-    legs = load_plan(checked_dir / "survey.plan")["legs"]
+    report = json.loads((checked_dir / "survey-check.json").read_text())
+    loaded = load_plan(checked_dir / "survey.plan", platform=report.get("platform", "px4_multirotor"))
+    items, legs = loaded["items"], loaded["legs"]
     if events is None:
         events = list(zip(range(len(items)), timeline(items, legs)))
     if lists is None:
@@ -70,7 +71,8 @@ def recording(tmp_path, checked_dir, *, events=None, lists=None, bind=True):
             ns = T0 + round(seconds * 1e9)
             if kind == "list":
                 waypoints = [t["mavros_msgs/msg/Waypoint"](
-                    item["frame"], item["command"], False, True, 0., 0., 0., 0.,
+                    item["frame"], item["command"], False, True,
+                    *[float("nan") if value is None else float(value) for value in item["params"][:4]],
                     item.get("lat", 0.), item.get("lon", 0.), item.get("alt") or 0.) for item in value]
                 message = t["mavros_msgs/msg/WaypointList"](0, waypoints)
                 writer.write(mission, ns, store.serialize_cdr(message, message.__msgtype__))
@@ -82,6 +84,9 @@ def recording(tmp_path, checked_dir, *, events=None, lists=None, bind=True):
     if bind:
         for name in ("survey-check.json", "survey.plan"):
             shutil.copyfile(checked_dir / name, root / name)
+        for name in ("mapping_handoff.json", "aircraft-limits.json", "camera.json"):
+            if (checked_dir / name).is_file():
+                shutil.copyfile(checked_dir / name, root / name)
         digest = sha256_file(root / "survey.plan")
         (root / "session.json").write_text(json.dumps({"schema_version": 1, "kind": "survey",
                                                        "survey_plan_sha256": digest}))
@@ -140,6 +145,27 @@ def test_missing_mission_list_leaves_legs_diagnostic(tmp_path):
     assert not result["passed"] and not result["numbering_verified"]
     assert any("unverified" in warning for warning in result["warnings"])
     assert all("header_start_ros_ns" in row and not row["qualified"] for row in result["legs"])
+
+
+def test_mission_download_after_progress_cannot_prove_which_plan_was_flown(tmp_path):
+    checked_dir = checked(tmp_path)
+    items = load_plan(checked_dir / "survey.plan")["items"]
+    root, _, _ = recording(tmp_path, checked_dir, lists=[(1.9, items)])
+    result = extract_survey_legs(root, tmp_path / "legs")
+    assert not result["passed"]
+    assert any("before the first" in e for e in result["errors"])
+    assert not any(row["qualified"] for row in result["legs"])
+
+
+def test_changed_vehicle_speed_or_camera_trigger_parameters_disqualify_legs(tmp_path):
+    import copy
+    checked_dir = checked(tmp_path)
+    items = copy.deepcopy(load_plan(checked_dir / "survey.plan")["items"])
+    items[1]["params"][1] *= 2
+    root, _, _ = recording(tmp_path, checked_dir, lists=[(.05, items)])
+    result = extract_survey_legs(root, tmp_path / "legs")
+    assert not result["passed"]
+    assert any("param2 differs" in e for e in result["errors"])
 
 
 def test_restarted_mission_disqualifies_every_leg(tmp_path):

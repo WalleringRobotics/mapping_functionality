@@ -169,6 +169,8 @@ def sample_loss(stamps, start, end, rate_hz=None, values=None):
                       missing_samples=result["missing_in_gaps"])
     if result["expected_samples"]:
         result["loss_percent"] = 100 * result["missing_samples"] / result["expected_samples"]
+    result["gap_estimate_exceeds_nominal_deficit"] = (
+        result["missing_in_gaps"] > result["missing_samples"] if rate_hz else None)
     if values is not None:
         selected = np.asarray(values, dtype=float)[inside]
         result["repeated_samples"] = (int(np.all(selected[1:] == selected[:-1], axis=1).sum())
@@ -403,10 +405,10 @@ def audit_bag(root):
                 expected = (f"{loss['expected_samples']} expected at {loss['requested_hz']} Hz"
                             if loss["requested_hz"] else "rate unrequested")
                 report["warnings"].append(
-                    f"IMU sample loss estimate in acquisition window: {topic} {loss['samples']} samples, "
-                    f"{expected} ({loss['loss_percent']:.2f}% missing), {loss['gaps']} gaps "
-                    f"(max {loss['max_gap_ms'] or 0:.0f} ms, {loss['missing_in_gaps']} samples), "
-                    f"{loss['repeated_samples']} repeated")
+                    f"IMU continuity diagnostics in acquisition window: {topic} {loss['samples']} samples, "
+                    f"{expected} ({loss['loss_percent']:.2f}% count deficit), {loss['gaps']} interval gaps "
+                    f"(max {loss['max_gap_ms'] or 0:.0f} ms, {loss['missing_in_gaps']} inferred samples), "
+                    f"{loss['repeated_samples']} repeated; hardware loss unknown")
         if report["kind"] == "calibration":
             from .recording import CALIBRATION_PHASES
             phases = json.loads((root / "calibration-phases.json").read_text())
@@ -429,6 +431,7 @@ def audit_bag(root):
                     q["qualification"] == "qualified" for q in qualities),
                 "maximum_good_streak": max(q["consecutive_good"] for q in qualities),
                 "required_good": monitor.minimum,
+                "gate_diagnostics": monitor.diagnostics(),
                 "rtt_ms": distribution([row["round_trip_time_ms"] for row in sync_rows]),
                 "offset_residual_ms": distribution([q["offset_residual_ns"] / 1e6 for q in qualities])}
             if not report["timesync"]["qualified_samples"]:
@@ -474,6 +477,7 @@ def import_bag(root, output, survey_legs=None):
         from .survey_flight import leg_windows
         windows, legs = leg_windows(survey_legs, sha256_file(root / "SHA256SUMS"))
         selection = {"survey_legs_sha256": sha256_file(survey_legs), "plan_sha256": legs["plan_sha256"],
+                     "profile_hashes": legs.get("profile_hashes", {}),
                      "legs_used": len(windows), "imported": Counter(), "skipped": Counter(),
                      "meaning": "Frames whose ROS header time lies between the PX4 reached events of a "
                                 "qualified leg's entry and exit; boundaries are approximate"}

@@ -1,0 +1,14 @@
+{
+  "schema": "wallering.exposure-events/v1",
+  "status": "unmeasured",
+  "alignment_evidence_sha256": null,
+  "epoch": null,
+  "camera_clock_domain": null,
+  "frame_counter_bits": null,
+  "event_counter_bits": null,
+  "counter_offset": null,
+  "polarity": null,
+  "event_to_exposure_start_ns": null,
+  "event_to_exposure_sigma_ns": null,
+  "exposure_duration_sigma_ns": null
+}

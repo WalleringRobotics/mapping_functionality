@@ -59,6 +59,11 @@ produces diagnostic camera poses directly from sealed ROS recordings. Timestamp
 corrections require an explicit evidenced bridge; see the
 [ROS association contract](docs/ros-bag-association.md).
 
+The new survey-wing integration adds offline `handoff-check`, Plane
+`survey-check --handoff ... --aircraft-limits ...`, and normalized `event-check`.
+See [the survey-wing contract](docs/survey-wing.md) for supported inputs and
+remaining GigE/F9P/SITL acceptance. The current OAK/PX4 capture defaults are retained.
+
 Import images **offline**, after recording, to use the existing image workflows:
 
 ```bash
