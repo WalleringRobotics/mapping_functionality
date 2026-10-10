@@ -439,7 +439,8 @@ def check_survey(plan_path, camera_path, profile_path, flight_time_budget_min, l
                               f"({expected:.2f} m)")
         if target_gsd_cm is not None and gsd_m * 100 > target_gsd_cm * (1 + gsd_tolerance):
             errors.append(f"Survey {number} GSD {gsd_m * 100:.2f} cm exceeds target {target_gsd_cm} cm")
-        survey_speed = float(transect.get("TerrainFlightSpeed") or 0) or speed
+        terrain_speed = finite(transect.get("TerrainFlightSpeed") or 0, "TerrainFlightSpeed")
+        survey_speed = max(terrain_speed, speed or 0) or None
         if survey_speed and isinstance(frontal, (int, float)):
             spacing = survey_speed / profile["fps"]
             achieved = 100 * (1 - spacing / footprint_frontal)

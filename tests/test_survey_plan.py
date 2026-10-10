@@ -107,6 +107,15 @@ def test_terrain_follow_points_are_leg_interior_and_turnaround_free_plans_warn(t
     assert any("no turnaround" in warning for warning in report["warnings"])
 
 
+def test_terrain_metadata_cannot_lower_the_commanded_speed_for_blur_check(tmp_path):
+    plan = survey_plan(distance_mode=3, speed=12)
+    plan['mission']['items'][2]['TransectStyleComplexItem']['TerrainFlightSpeed'] = 1
+    report = check_survey(write_plan(tmp_path / 'terrain-speed.plan', plan), CAMERA, PROFILE, 15)
+    assert not report['passed']
+    assert report['surveys'][0]['speed_m_s'] == 12
+    assert any('motion blur' in error for error in report['errors'])
+
+
 def test_items_out_of_transect_order_are_refused(tmp_path):
     plan = survey_plan()
     items = plan["mission"]["items"][2]["TransectStyleComplexItem"]["Items"]
