@@ -1,5 +1,8 @@
 # Camera upgrades and delivery roadmap
 
+The current independent status review and phased testing plan is
+[the 2026-11-16 technical review](technical-review-20261116.md).
+
 ## Open-issue continuation, 2026-10-10
 
 [PR #29](https://github.com/WalleringRobotics/mapping_functionality/pull/29) builds
