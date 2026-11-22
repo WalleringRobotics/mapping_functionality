@@ -362,6 +362,44 @@ shared base uncertainty. It is a conservative engineering budget, **not a
 confidence interval or a guaranteed map-wide bound**. Empirical percentiles describe
 this checkpoint sample; scene regions between checkpoints remain untested.
 
+## Expected accuracy by configuration
+
+These are engineering estimates made on 2026-10-04 for planning, not measured
+results. Assumptions: nadir 12 MP RGB, 30 m above ground (about 1.0 cm GSD), 3 m/s,
+1 ms exposure, 80/70 % overlap, ODM processing, accuracy stated as checkpoint RMSE.
+
+| Configuration | Horizontal | Vertical | What it needs |
+|---|---|---|---|
+| Standalone GNSS, no GCPs | 1.5–5 m absolute | 3–8 m absolute | Nothing new. Relative accuracy inside the model is about 2–5 cm, but scale can be off by 1–2 % |
+| SBAS or code DGPS, no GCPs | 0.5–1.5 m | 1–3 m | DGPS corrections to the existing receiver. Little benefit for mapping; the image-accuracy gate accepts only RTK fixed (fix type 6) |
+| GCPs plus checkpoints, any GNSS | 2–4 cm | 3–6 cm | 5–8 surveyed targets per site. Independent of timing calibration. Lowest-risk route to an accurate first map |
+| RTK fixed via NTRIP, uncalibrated timing and lever arms | 5–15 cm | 8–20 cm | The fitted F9P, a PX4 parameter change and a caster. The timing uncertainty of 10–30 ms at 3 m/s dominates |
+| RTK fixed via NTRIP, calibrated timing (≤ 2 ms) and lever arms (±1 cm), no GCPs | 2–4 cm | 4–8 cm | A correction source, corrections reaching the receiver, rig calibration, the PX4 timing gate and the RGB readout (#14). Keep at least one checkpoint to detect datum and vertical bias |
+| RTK plus GCPs | 1.5–3 cm | 2–4 cm | Everything above. Best achievable with this camera; limited by 1 cm GSD and rolling shutter |
+
+At 60 m, the height that 10 ha per sortie needs (see
+[survey planning](survey-planning.md#2-plan-the-survey)), the GCP-based figures
+roughly double, to about 3–6 cm horizontal and 5–10 cm vertical. The RTK-based
+figures change less because GNSS error dominates them.
+
+Budget behind the calibrated RTK row, per camera centre (1σ): receiver 1–2 cm
+horizontal and 2–3 cm vertical, plus 1 ppm of base distance; timing 2 ms × 3 m/s
+= 0.6 cm; lever arm 1 cm; 0.5° attitude over a 0.3 m lever = 0.3 cm. Base
+coordinates matter most of all. A base that was only surveyed in by averaging can be
+1–2 m off in absolute terms while every result looks consistent. A network CORS
+mount, or a base tied to one, avoids this.
+
+**PPK** would give the same accuracy as RTK without a live correction link, but
+it needs the rover's raw observations. PX4 logs those only from a serial u-blox
+receiver (`GPS_DUMP_COMM` in the serial GPS driver). The multirotor's fitted
+receiver is on DroneCAN, so PPK would need a separate raw-data connection to the
+F9P. Plan on live RTK unless the site has no reliable network.
+
+GCPs take timing and lever-arm calibration off the critical path to a first
+accurate map. That is why the [2026-11-16 technical review](technical-review-20261116.md)
+asks the operator to confirm a GCP-first route (decision 2), with RTK recorded
+alongside and judged against the same checkpoints.
+
 ## Commissioning evidence before field claims
 
 On a static control point, compare raw GNSS coordinates, height reference and

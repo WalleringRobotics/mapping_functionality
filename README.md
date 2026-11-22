@@ -168,6 +168,7 @@ simulated PX4 publishers. OAK/PX4 hardware remains outside automated coverage.
 - [Survey planning with QGroundControl](docs/survey-planning.md)
 - [Postprocessing recipes, control formats and recovery](docs/postprocessing.md)
 - [Camera upgrades and remaining qualification](docs/roadmap.md)
+- [Technical review and phased testing plan, 2026-11-16](docs/technical-review-20261116.md)
 - [Primary references and confidence](docs/references.md)
 
 License: Apache-2.0. Keep datasets, serial numbers, locations and credentials outside
