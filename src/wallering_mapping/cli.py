@@ -194,6 +194,10 @@ def parser():
     survey_check = commands.add_parser("survey-check",
                                        help="Check a QGroundControl Survey plan against the capture profile")
     survey_arguments(survey_check)
+    from .survey_generate import add_arguments as survey_plan_arguments
+    survey_plan = commands.add_parser("survey-plan",
+                                      help="Generate a checked Survey plan from optics, aircraft and target")
+    survey_plan_arguments(survey_plan)
     handoff = commands.add_parser("handoff-check", help="Audit design camera and capture budgets offline")
     handoff.add_argument("handoff", type=Path)
     handoff.add_argument("--output", type=Path, required=True)
@@ -238,6 +242,11 @@ def main(argv=None):
             return 0 if result["passed"] else 2
         elif args.command == "survey-check":
             from .survey_plan import run
+            result = run(args)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command == "survey-plan":
+            from .survey_generate import run
             result = run(args)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2

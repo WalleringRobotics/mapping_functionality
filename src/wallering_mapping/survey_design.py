@@ -92,7 +92,7 @@ def design(spec, profile, aircraft, *, relief_m, gsd_cm=None, height_m=None, tar
         if target_gsd <= 0:
             raise ValueError("Target GSD must be positive")
         ceiling = target_gsd * spec["ImageWidth"] * spec["FocalLength"] / spec["SensorWidth"]
-        height = round_down(ceiling - relief, 0.1)
+        height = round(round_down(ceiling - relief, 0.1), 1)
     else:
         height = finite(height_m, "Height")
     low, high = height - relief, height + relief
