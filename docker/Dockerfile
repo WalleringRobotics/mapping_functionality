@@ -8,7 +8,7 @@
 #     --output type=local,dest=runs/pycolmap-wheel .
 #
 # Pins: Ubuntu base digest, dated ROS snapshot (signed, key vendored here), Ceres
-# release checksum, COLMAP commit (its fetched PoseLib/faiss archives are SHA256-pinned upstream) and every
+# commit, COLMAP commit (its fetched PoseLib/faiss archives are SHA256-pinned upstream) and every
 # Python package. Ubuntu archive packages follow jammy-updates; the resulting
 # versions are written to /opt/wallering/manifest/ in the image.
 
@@ -19,6 +19,7 @@ ARG UBUNTU_BASE=ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035
 # CPU-only; supports model IO and quality assessment, not the COLMAP CLI.
 FROM ${UBUNTU_BASE} AS pycolmap-build
 ARG CERES_VERSION=2.2.0
+ARG CERES_COMMIT=85331393dc0dff09f6fb9903ab0c4bfa3e134b01
 ARG COLMAP_VERSION=3.12.6
 ARG COLMAP_COMMIT=4d5b60e19ad268072adaf1267d21fa38a9a828ca
 # Orin Nano (8 GB) runs out of memory above two compile jobs.
@@ -41,10 +42,17 @@ RUN python3 -m venv /build/venv \
     && /build/venv/bin/python -m pip install --no-cache-dir \
       'scikit-build-core==1.1.1' 'pybind11==3.0.1' 'cmake==3.31.10' 'auditwheel==6.8.2' 'numpy==1.26.4'
 # PyCOLMAP 3.12.6 binds Ceres >= 2.1 enums; jammy ships 2.0, so build a pinned CPU Ceres.
-ADD --checksum=sha256:48b2302a7986ece172898477c3bcd6deb8fb5cf19b3327bc49969aad4cede82d \
-    http://ceres-solver.org/ceres-solver-${CERES_VERSION}.tar.gz /build/ceres.tar.gz
-RUN tar xzf ceres.tar.gz \
-    && /build/venv/bin/cmake -S ceres-solver-"$CERES_VERSION" -B ceres-native -GNinja \
+# Fetched from the upstream tag rather than the release tarball, whose host
+# ceres-solver.org is down (ceres-solver/ceres-solver#1218). The tarball differs only
+# by prebuilt docs and a VERSION file. .git is removed so CMake configure does not
+# download a Gerrit commit hook.
+RUN git init -q ceres-solver-"$CERES_VERSION" \
+    && git -C ceres-solver-"$CERES_VERSION" fetch -q --depth 1 \
+      https://github.com/ceres-solver/ceres-solver.git "$CERES_COMMIT" \
+    && git -C ceres-solver-"$CERES_VERSION" checkout -q FETCH_HEAD \
+    && test "$(git -C ceres-solver-"$CERES_VERSION" rev-parse HEAD)" = "$CERES_COMMIT" \
+    && rm -rf ceres-solver-"$CERES_VERSION"/.git
+RUN /build/venv/bin/cmake -S ceres-solver-"$CERES_VERSION" -B ceres-native -GNinja \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/build/install -DBUILD_SHARED_LIBS=ON \
       -DUSE_CUDA=OFF -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
       -DBUILD_DOCUMENTATION=OFF \
