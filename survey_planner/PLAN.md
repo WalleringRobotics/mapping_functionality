@@ -1,7 +1,8 @@
 # Survey planner: plan for review
 
 **Status:** proposal for review. No code yet. Implementation commits follow on this
-branch only after the plan is agreed.
+branch only after the plan is agreed. Implementing agents should also read
+[NOTES.md](NOTES.md), which has the handoff context and verified format details.
 
 ## Goal
 
