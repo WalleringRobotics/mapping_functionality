@@ -92,6 +92,50 @@ mission once at readiness and records `/mavros/mission/waypoints` with the reach
 events. `--announce` reports recording start and stop to QGroundControl and the
 vehicle buzzer. Both need MAVROS. See the [survey planning guide](survey-planning.md).
 
+### Field recording from the QGroundControl laptop
+
+The Orin's USB-C port is its only USB device port. With a laptop connected to it,
+JetPack's USB device mode gives the Orin `192.168.55.1` and the laptop
+`192.168.55.100`. The USB-A ports are host-only. Keep the PX4 adapter on a USB-A
+port: on USB-C it takes the host role and blocks the laptop link.
+
+```bash
+ssh <user>@192.168.55.1
+cd <this checkout>
+bash deploy/field-record.sh start   # optional: --duration SECONDS, --survey-check DIR
+# Unplug after "Startup checks passed". After landing, reconnect:
+bash deploy/field-record.sh status
+bash deploy/field-record.sh stop    # seals the session; keep power on until it returns
+```
+
+`start` runs `wr-map capture --start-mavros --announce` as the transient systemd
+user unit `wr-field-record`. It uses a 60 s warmup and records until stopped
+unless `--duration` is given. Unplugging or logging out does not stop it. This
+needs `loginctl enable-linger` for the user, but not root.
+
+`start` returns only after the startup checks pass, which takes about 40 s.
+Ctrl+C or Ctrl+Z there only stops the waiting; `status` reports the session
+state. If the checks fail, `start` stops the unit and reports the failure.
+Running `stop` while the state is still `starting` aborts the session, which
+is then marked `failed`.
+
+Sessions go under ignored `runs/field/`, and `runs/field/latest` points at the
+newest one. Each session's output goes to `runs/field/<session>.log`, because
+this host keeps no user journal.
+
+`stop` sends SIGINT, the recorder's clean stop. On 2026-11-22, a 30 s field
+session sealed in about 20 s. Removing power before `stop` returns leaves the
+session unsealed.
+
+The start announcement plays on the vehicle buzzer when warmup ends. Its text
+reaches QGroundControl only if PX4 forwards the Orin's messages
+(`MAV_1_FORWARD`), which is 0 on this vehicle as of 2026-11-22. A manual stop
+shuts down the session's MAVROS at the same time, so no stop announcement is
+sent; `stop` prints the final state instead.
+
+Without a network, the Orin keeps the clock it booted with. `/mavros/time_reference`
+records PX4's GPS time alongside it.
+
 ## Inspect and replay
 
 ```bash
