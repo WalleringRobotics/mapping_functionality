@@ -5,7 +5,7 @@ import pytest
 
 from wallering_mapping.cli import parser
 from wallering_mapping.recording import (
-    CALIBRATION_DURATION, CALIBRATION_PHASES, phase_record, request_imu_rate,
+    CALIBRATION_DURATION, CALIBRATION_PHASES, nest_parameters, phase_record, request_imu_rate, solid_window,
 )
 
 
@@ -129,3 +129,26 @@ def test_recorder_refuses_survey_and_announce_misuse_before_ros(tmp_path, extra,
                              str(tmp_path / "session"), *extra], capture_output=True, text=True)
     assert result.returncode == 2 and message in result.stderr
     assert not (tmp_path / "session").exists()
+
+
+def test_parameters_nest_like_ros2_param_dump_for_validation():
+    # bags.py reads oak-parameters.yaml as ["/oak"]["ros__parameters"]["rgb"]["i_fps"].
+    names = ["camera.i_pipeline_type", "imu.i_sync_method", "rgb.i_fps", "use_sim_time"]
+    tree = nest_parameters(names, ["RGBStereo", "COPY", 30.0, False])
+    assert tree == {"camera": {"i_pipeline_type": "RGBStereo"}, "imu": {"i_sync_method": "COPY"},
+                    "rgb": {"i_fps": 30.0}, "use_sim_time": False}
+    assert nest_parameters(["a.b.c", "a.d"], [1, 2]) == {"a": {"b": {"c": 1}, "d": 2}}
+
+
+def test_startup_needs_an_unbroken_window_of_every_stream():
+    limits = {"/oak/rgb/camera_info": 1.5, "/oak/imu/data": .25}
+    state = {"since": None, "restarts": 0}
+    assert not solid_window(state, 10., {"/oak/imu/data": 10.}, limits, 5.)  # Camera not seen yet.
+    last = {"/oak/rgb/camera_info": 10., "/oak/imu/data": 10.}
+    assert not solid_window(state, 10., last, limits, 5.) and state["since"] == 10.
+    # An IMU stall restarts the window; recovering streams start it again.
+    assert not solid_window(state, 11., {**last, "/oak/rgb/camera_info": 11.}, limits, 5.)
+    assert state == {"since": None, "restarts": 1}
+    assert not solid_window(state, 12., {"/oak/rgb/camera_info": 11., "/oak/imu/data": 12.}, limits, 5.)
+    # Cameras at 2 fps may go 1.5 s between frames without counting as a stall.
+    assert solid_window(state, 17., {"/oak/rgb/camera_info": 15.6, "/oak/imu/data": 17.}, limits, 5.)

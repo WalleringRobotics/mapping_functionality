@@ -99,8 +99,8 @@ git -c safe.directory="$bag_repo" -C "$bag_repo" diff --stat > "$bag_output/git-
 [[ -z "${WR_MAPPING_IMAGE_ID:-}" ]] || printf '%s\n' "$WR_MAPPING_IMAGE_ID" > "$bag_output/container-image.txt"
 [[ ! -d /opt/wallering/manifest ]] || cp -r /opt/wallering/manifest "$bag_output/image-manifest"
 # Refuse duplicate owners. A failed graph query is also a failed preflight.
-# Wait past the 0.5 s CLI default so a slow discovery cannot hide an owner.
-timeout 15 ros2 node list --no-daemon --spin-time 5 > "$bag_output/nodes-before.txt"
+# Running drivers appeared within 0.8 s on the Orin; wait 2 s so none is missed.
+timeout 15 python3 "$bag_output/recording.py" --nodes "$bag_output/nodes-before.txt" --wait 2
 if grep -qx /oak "$bag_output/nodes-before.txt"; then echo "OAK driver is already running" >&2; exit 2; fi
 if [[ "$bag_start_mavros" == true ]]; then
   if grep -q '^/mavros' "$bag_output/nodes-before.txt"; then echo "Reuse the existing MAVROS owner" >&2; exit 2; fi

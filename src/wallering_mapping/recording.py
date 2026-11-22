@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 import time
 
@@ -24,6 +25,8 @@ SURVEY_FILES = ("survey-check.json", "survey.plan")
 # STATUSTEXT for QGroundControl's message panel and a PX4 buzzer tune (QBASIC1_1).
 ANNOUNCEMENTS = {"started": ("WR mapping: recording started", "MFT200L16O4CEG"),
                  "stopped": ("WR mapping: recording stopped", "MFT200L16O4GEC")}
+READY_TOPICS = ("/oak/rgb/camera_info", "/oak/left/camera_info", "/oak/right/camera_info",
+                "/oak/imu/data")
 
 
 def phase_record(index, started_ns):
@@ -211,6 +214,157 @@ def ros_announce(event, report, wait_seconds=2.):
         rclpy.shutdown()
 
 
+def nest_parameters(names, values):
+    """Nest dotted parameter names into the mapping `ros2 param dump` writes."""
+    tree = {}
+    for name, value in zip(names, values):
+        *parents, leaf = name.split(".")
+        branch = tree
+        for part in parents:
+            branch = branch.setdefault(part, {})
+        branch[leaf] = value
+    return tree
+
+
+def ros_nodes(path, wait_seconds):
+    """List the graph's nodes as `ros2 node list` does, after a discovery wait.
+
+    A fresh process found the running drivers within 0.8 s on the Orin; the CLI
+    default of 0.5 s could miss them, and a fixed 5 s wait delayed every start.
+    """
+    import rclpy
+    rclpy.init()
+    node = rclpy.create_node("_mapping_preflight")
+    try:
+        time.sleep(wait_seconds)
+        names = {f"{namespace.rstrip('/')}/{name}"
+                 for name, namespace in node.get_node_names_and_namespaces() if not name.startswith("_")}
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+    Path(path).write_text("".join(f"{name}\n" for name in sorted(names)))
+
+
+def solid_window(state, now, last, limits, seconds):
+    """Advance the continuous-data window; True once every stream kept up for `seconds`.
+
+    A stream stalls when nothing arrived within its limit, which restarts the window.
+    """
+    if not all(topic in last and now - last[topic] <= limit for topic, limit in limits.items()):
+        state["restarts"] += state["since"] is not None
+        state["since"] = None
+        return False
+    if state["since"] is None:
+        state["since"] = now
+    return now - state["since"] >= seconds
+
+
+def ros_ready(output, camera_only, timeout=60., solid_seconds=5.):
+    """Wait for sensor data, PX4 and driver parameters in one ROS process.
+
+    A ROS CLI process per check paid start-up and discovery each time, and Humble's
+    `ros2 param dump` requests parameters one at a time (14 s for /oak on the Orin),
+    which held the start for about 50 s. Readiness also requires `solid_seconds`
+    in which every camera and IMU stream kept arriving.
+    """
+    import rclpy
+    import yaml
+    from rcl_interfaces.srv import GetParameters, ListParameters
+    from rclpy.qos import qos_profile_sensor_data
+    from ros2param.api import get_value
+    from rosidl_runtime_py import message_to_yaml
+    from sensor_msgs.msg import CameraInfo, Imu
+
+    output, started = Path(output), time.monotonic()
+    seconds, subscriptions, calls, last, counts = {}, {}, {}, {}, {}
+    rclpy.init()
+    node = rclpy.create_node("_mapping_readiness")
+
+    def finish(step, name, text):
+        (output / name).write_text(text)
+        seconds[step] = round(time.monotonic() - started, 3)
+
+    def follow(topic, kind, name=None, accept=lambda message: True):
+        def received(message):
+            last[topic] = time.monotonic()
+            counts[topic] = counts.get(topic, 0) + 1
+            if name and topic not in seconds and accept(message):
+                finish(topic, name, message_to_yaml(message) + "---\n")
+        subscriptions[topic] = node.create_subscription(kind, topic, received, qos_profile_sensor_data)
+
+    # A stall is three missed camera frames, or a quarter second without IMU samples.
+    profile = yaml.safe_load((output / "oak-requested.yaml").read_text())["/oak"]["ros__parameters"]
+    limits = {topic: .25 for topic in READY_TOPICS if topic.endswith("/imu/data")}
+    for camera in ("rgb", "left", "right"):
+        limits[f"/oak/{camera}/camera_info"] = 3. / float(profile[camera]["i_fps"])
+    for topic in READY_TOPICS:
+        follow(topic, Imu if topic.endswith("/imu/data") else CameraInfo,
+               f"{topic.replace('/', '_')}-first.yaml")
+    # Dump parameters once the node publishes, when its driver has declared them all.
+    parameters = {"/oak": ("oak-parameters.yaml", READY_TOPICS)}
+    if not camera_only:
+        from mavros_msgs.msg import State
+        follow("/mavros/state", State, "mavros-state.yaml", lambda message: message.connected)
+        follow("/mavros/imu/data_raw", Imu)
+        limits["/mavros/imu/data_raw"] = .25
+        parameters["/mavros/time"] = ("mavros-time.yaml", ("/mavros/state",))
+    clients = {target: (node.create_client(ListParameters, f"{target}/list_parameters"),
+                        node.create_client(GetParameters, f"{target}/get_parameters"))
+               for target in parameters}
+
+    def fetch(target):
+        name, after = parameters[target]
+        listing, getting = clients[target]
+        if target in seconds or not all(step in seconds for step in after):
+            return
+        call = calls.get(target)
+        if call is None:
+            if listing.service_is_ready():
+                calls[target] = (listing.call_async(ListParameters.Request()), None)
+        elif call[1] is None:
+            if call[0].done() and getting.service_is_ready():
+                names = sorted(call[0].result().result.names)
+                calls[target] = (getting.call_async(GetParameters.Request(names=names)), names)
+        elif call[0].done():
+            values = [get_value(parameter_value=value) for value in call[0].result().values]
+            dump = {target: {"ros__parameters": nest_parameters(call[1], values)}}
+            finish(target, name, yaml.dump(dump, default_flow_style=False) + "\n")
+
+    window = {"since": None, "restarts": 0, "counts": {}}
+    steps = [topic for topic in subscriptions if topic != "/mavros/imu/data_raw"]
+    steps += [*parameters, "solid", "graph"]
+    try:
+        while len(seconds) < len(steps) and time.monotonic() < started + timeout:
+            rclpy.spin_once(node, timeout_sec=.05)
+            for target in parameters:
+                fetch(target)
+            if "solid" not in seconds:
+                since = window["since"]
+                if solid_window(window, time.monotonic(), last, limits, solid_seconds):
+                    seconds["solid"] = round(time.monotonic() - started, 3)
+                    window["messages"] = {topic: counts[topic] - window["counts"].get(topic, 0)
+                                          for topic in limits}
+                    for topic in [topic for topic in subscriptions if topic in seconds or topic not in steps]:
+                        node.destroy_subscription(subscriptions.pop(topic))
+                elif since is None and window["since"] is not None:
+                    window["counts"] = dict(counts)
+            if len(seconds) == len(steps) - 1:
+                graph = sorted(node.get_topic_names_and_types())
+                finish("graph", "graph.txt", "".join(
+                    f"{name} [{', '.join(types)}]\n" for name, types in graph))
+    finally:
+        missing = [step for step in steps if step not in seconds]
+        write_report(output / "readiness.json", {
+            "schema_version": 2, "timeout_seconds": timeout, "seconds": seconds, "missing": missing,
+            "solid": {"seconds": solid_seconds, "stall_limits_seconds": limits,
+                      "restarts": window["restarts"], "messages": window.get("messages")}})
+        node.destroy_node()
+        rclpy.shutdown()
+    if missing:
+        print(f"Not ready after {timeout:g} s; waiting for {', '.join(missing)}", file=sys.stderr)
+    return not missing
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_mutually_exclusive_group(required=True)
@@ -218,11 +372,22 @@ def main():
     action.add_argument("--pull-mission", action="store_true")
     action.add_argument("--announce", choices=sorted(ANNOUNCEMENTS))
     action.add_argument("--verify-survey", type=Path)
+    action.add_argument("--ready", type=Path, metavar="SESSION")
+    action.add_argument("--nodes", type=Path, metavar="LIST")
+    parser.add_argument("--camera-only", action="store_true")
+    parser.add_argument("--timeout", type=float, default=60.)
+    parser.add_argument("--solid-seconds", type=float, default=5.)
+    parser.add_argument("--wait", type=float, default=2.)
     parser.add_argument("--profile", type=Path)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.verify_survey:
         print(verify_survey(args.verify_survey, args.profile))
+        return 0
+    if args.ready:
+        return 0 if ros_ready(args.ready, args.camera_only, args.timeout, args.solid_seconds) else 2
+    if args.nodes:
+        ros_nodes(args.nodes, args.wait)
         return 0
     if args.report is None:
         parser.error("--report is required")
