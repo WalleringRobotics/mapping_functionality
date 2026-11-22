@@ -88,11 +88,11 @@ Summarised from the operator's own request:
   | 5 | None |
 
   Relative is **1**, not 0.
-- **Unverified, check next:** whether QGroundControl, when it loads a Survey, uploads
-  the saved `TransectStyleComplexItem.Items` as-is or regenerates transects from the
-  polygon. Read `TransectStyleComplexItem.cc` and `SurveyComplexItem.cc` at the
-  **v5.1.5** tag, which the checker targets. This decides how closely the transect
-  algorithm must match QGroundControl's.
+- **Verified at v5.1.5:** QGroundControl uploads the saved
+  `TransectStyleComplexItem.Items` as they are (`appendMissionItems`), and regenerates
+  transects only when the Survey is edited (`_rebuildTransectsPhase1WorkerSinglePolygon`
+  clears the loaded items). The generator therefore uses its own line algorithm; see
+  PLAN.md.
 
 ## Existing tools reviewed and not adopted
 
@@ -122,5 +122,6 @@ Summarised from the operator's own request:
 
 ## Still open
 
-The eight questions at the end of PLAN.md are unanswered as of this commit. Check
-PR #33 for the operator's answers before starting Phase 1.
+PLAN.md was revised after design review on 2026-11-22: placement, edge margin, trigger
+commands and the built-in agent are decided there. Six questions remain at its end.
+Check PR #33 for the operator's answers before starting Phase 1.
