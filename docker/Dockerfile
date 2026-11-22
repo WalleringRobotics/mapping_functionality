@@ -41,8 +41,10 @@ RUN python3 -m venv /build/venv \
     && /build/venv/bin/python -m pip install --no-cache-dir \
       'scikit-build-core==1.1.1' 'pybind11==3.0.1' 'cmake==3.31.10' 'auditwheel==6.8.2' 'numpy==1.26.4'
 # PyCOLMAP 3.12.6 binds Ceres >= 2.1 enums; jammy ships 2.0, so build a pinned CPU Ceres.
+# The official release tarball, via the MacPorts mirror: ceres-solver.org stopped
+# resolving (ceres-solver/ceres-solver#1218). The checksum is unchanged.
 ADD --checksum=sha256:48b2302a7986ece172898477c3bcd6deb8fb5cf19b3327bc49969aad4cede82d \
-    http://ceres-solver.org/ceres-solver-${CERES_VERSION}.tar.gz /build/ceres.tar.gz
+    https://distfiles.macports.org/ceres-solver/ceres-solver-${CERES_VERSION}.tar.gz /build/ceres.tar.gz
 RUN tar xzf ceres.tar.gz \
     && /build/venv/bin/cmake -S ceres-solver-"$CERES_VERSION" -B ceres-native -GNinja \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/build/install -DBUILD_SHARED_LIBS=ON \
