@@ -1,12 +1,11 @@
 # Survey planner: plan for review
 
-**Status:** proposal, revised after design review on 2026-11-22. No code yet.
-Implementation commits follow on this branch only after the plan is agreed.
-Implementing agents should also read [NOTES.md](NOTES.md), which has the handoff
-context and verified format details.
+**Status:** Phase 1 is implemented on this branch as `wr-map survey-plan`, except the
+PX4 SIH run (see [Phase 1 status](#phase-1-status)). The operator procedure is in
+[`docs/survey-planning.md`](../docs/survey-planning.md). This file remains the plan
+for Phases 2 to 4; implementing agents should also read [NOTES.md](NOTES.md).
 
-This file and NOTES.md are review documents. Before merge, the lasting content moves to
-`docs/survey-planning.md` and both files are removed.
+Both files are review documents and are removed when the last phase merges.
 
 ## Goal
 
@@ -347,6 +346,75 @@ Later phases follow, each proposed as its own PR:
 Upload and arming, airspace or site approval, terrain following in v1, ArduPilot Plane
 (which has its own handoff path), and corridor or structure scans.
 
+## Phase 1 status
+
+Done, with tests, in `src/wallering_mapping/`:
+
+| Module | Content |
+|---|---|
+| `survey_design.py` | Aircraft definition reader; rules for height, spacing, speed, turnaround and margins |
+| `survey_lines.py` | KML / GeoJSON / `.plan` boundary import, line layout, angle and start selection, fence |
+| `survey_coverage.py` | Coverage test; reads only a finished `.plan` |
+| `survey_write.py` | QGroundControl 5.1 Survey writer |
+| `survey_generate.py` | `plan_survey()`, time-budget alternatives, review bundle, `wr-map survey-plan` |
+
+Differences from the plan above, found while building it:
+
+- **Lines are not chords of a buffered boundary.** The first version clipped lines to
+  a buffered polygon. It passed `survey-check` on every field and failed the coverage
+  test on every field with a slanted or concave edge. A line is now flown wherever its
+  footprint touches the field, and continues past the field's sides only as far as the
+  edge needs: 0.33 of a line spacing at 70 % side overlap, not a full spacing. Along
+  track the margin is the acceptance radius when blur binds, and up to half a
+  footprint when forward overlap binds. The saved Survey polygon is the outline those
+  lines are chords of.
+- **Coverage counts lines, each with enough frames.** A line sees a ground point only
+  if the required number of its frames contain the point. Every point needs the
+  required number of such lines.
+- **Saved side overlap.** QGroundControl derives spacing from the overlap at the
+  nominal height, so with relief the saved overlap is the nominal-height value that
+  gives the spacing needed over high ground. The requested overlap is in `review.json`.
+- **`tests/qgc_plans.py` is unchanged.** It stays an independent builder of
+  QGroundControl-shaped plans, and the coverage tests use it to show that lines clipped
+  to the boundary fail at the edges.
+- **The coarser-GSD alternative** is found by stepping the height up, because a higher
+  flight is not always quicker.
+
+Not done:
+
+- [ ] **PX4 SIH flight of a generated plan** (commit 8). `deploy/verify-calibration-sitl.py`
+  accepts only the calibration mission's simple items. Extending it to a Survey, and to
+  measuring speed and cross-track error at each leg entry, could not be run on the
+  development machine and is left for its own change, validated in the `sitl.yml`
+  workflow.
+- [ ] **QGroundControl opens a generated plan** and uploads the saved items unchanged.
+  Needs the operator's QGroundControl.
+
+## Raised in review, not yet designed
+
+**Yaw towards the target, and a later follow mode.** The operator wants the aircraft
+to sweep its yaw to keep the camera on the target, with the camera feed possibly
+driving a follow mode later.
+
+This does not fit the survey generated here, and is recorded so it is not lost:
+
+- The reviewed camera definition is a **nadir** mount with the image width across the
+  track, and `survey-check` and the coverage test both rely on PX4 yawing along each
+  leg (`MIS_YAWMODE` 0). With a nadir camera, yaw does not change what is seen; it only
+  rotates the footprint, which would change the side overlap the plan guarantees.
+- Yaw towards a target matters when the camera looks forward or obliquely: an orbit or
+  facade pass around a structure, with a region-of-interest command holding the yaw.
+  That is a different mission type. `survey-check` refuses everything except a Survey
+  today, and "structure scans" are out of scope above.
+- A follow mode driven by the camera feed is closed-loop vehicle control. Every
+  interface here is offline by design; that would be a separate, on-vehicle component
+  with its own safety case.
+
+To design it, three things are needed from the operator: how the camera is mounted for
+those flights (nadir, fixed oblique, or gimbal), what the target is (a structure to
+orbit, or a field), and whether the oblique images are for the 3D model or for
+inspection.
+
 ## Decided in review, 2026-11-22
 
 | Question | Decision |
@@ -358,7 +426,11 @@ Upload and arming, airspace or site approval, terrain following in v1, ArduPilot
 | Transect algorithm | Our own; QGroundControl uploads saved items as they are |
 | Map imagery | One keyless satellite layer in the first version; Bing and Google as later keyed options |
 
-## Questions for the reviewer
+## Questions answered in review, 2026-11-22
+
+All five were agreed as proposed: the overlaps below, home elevation and relief as
+required inputs, a 20 m fence margin, shapely as an optional dependency, and one PR
+per phase.
 
 1. **Default overlaps:** 80 % forward and 70 % side for terrain, as in the test
    fixtures? What for building: 85 % / 75 % with the crossing grid?

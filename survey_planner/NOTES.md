@@ -122,6 +122,13 @@ Summarised from the operator's own request:
 
 ## Still open
 
-PLAN.md was revised after design review on 2026-11-22: placement, edge margin, trigger
-commands, the built-in agent and map imagery are decided there. Five questions remain at its end.
-Check PR #33 for the operator's answers before starting Phase 1.
+All review questions were answered on 2026-11-22 and Phase 1 is implemented; see
+"Phase 1 status" in PLAN.md for what differs from the plan and what remains (the PX4
+SIH run and the operator's QGroundControl check). The yaw-towards-target and follow
+mode request is recorded there as not yet designed.
+
+Local development note: this machine has no `python3-venv`. A working environment was
+made with `python3 -m venv --without-pip .venv` and
+`python3 -m pip --python .venv/bin/python install -e '.[dev,bags,terrain,diagnostics,planner]'`.
+`pycolmap` was not installed, so `tests/test_georeference.py` and
+`tests/test_processing.py` were not run locally.

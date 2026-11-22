@@ -50,7 +50,8 @@ stored rig using `wr-map validate SESSION --rig-calibration rig.json`. See the
 [physical optical/target acceptance procedure](docs/optical-target-acceptance.md).
 The 20 fps profiles are qualification candidates; the production camera default
 remains 2 fps until a complete soak meets its acceptance criteria.
-Mapping flights are planned in QGroundControl's Survey pattern. `wr-map survey-check`
+Mapping flights are generated with `wr-map survey-plan` from the camera, aircraft and
+target, or drawn in QGroundControl's Survey pattern. `wr-map survey-check`
 checks the saved plan against the capture profile, `wr-map capture --survey-check`
 binds it to the recording, and `wr-map survey-legs` with `bag-import --survey-legs`
 keeps only images flown on survey legs; see the [survey planning guide](docs/survey-planning.md).

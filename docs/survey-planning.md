@@ -4,12 +4,15 @@ The default workflow below is OAK/PX4. The explicit ArduPilot Plane path uses
 `--handoff` and `--aircraft-limits`; see [the wing contract](survey-wing.md) for
 its conservative supported subset and remaining acceptance.
 
-QGroundControl's Survey pattern is the planner and the flight UI. This repository
-does not draw grids. It checks the saved plan against the OAK capture profile, binds
-the checked plan to the recording, verifies the mission PX4 actually holds, and
-selects only the images flown on survey legs.
+A survey plan comes from one of two routes. `wr-map survey-plan` generates one from
+the camera, the aircraft and the target; or you draw one by hand in QGroundControl's
+Survey pattern. QGroundControl remains the flight UI and the only upload path. Either
+way this repository checks the saved plan against the OAK capture profile, binds the
+checked plan to the recording, verifies the mission PX4 actually holds, and selects
+only the images flown on survey legs.
 
 ```text
+wr-map survey-plan ──────────────────────────────────────▶ checked/ (also review files)
 QGroundControl Survey ──save .plan──▶ wr-map survey-check ──▶ checked/ (survey.plan, survey-check.json)
                                                                 │
 QGroundControl uploads to PX4 ◀──────────────────────────────────┘ same .plan
@@ -18,6 +21,95 @@ wr-map capture --survey-check checked/ ──▶ sealed session (plan, mission l
                                                                 │
 wr-map survey-legs SESSION ──▶ survey-legs.json ──▶ wr-map bag-import --survey-legs
 ```
+
+## Generate the plan
+
+This runs on the workstation or the site laptop, beside QGroundControl, never on the
+Jetson. Install it once with `pip install -e '.[planner]'`; it needs no ROS or camera
+drivers and works offline.
+
+1. Copy [`configs/px4-multirotor.template.json`](../configs/px4-multirotor.template.json)
+   and fill it in for the vehicle. Null entries are refused.
+
+   | Field | PX4 parameter | Used for |
+   |---|---|---|
+   | `vehicle_type` | `MAV_TYPE` (2, 13, 14 or 15) | The plan's vehicle type |
+   | `max_survey_speed_m_s` | at most `MPC_XY_CRUISE` | Survey speed |
+   | `accel_m_s2` | `MPC_ACC_HOR` | Turnaround length |
+   | `acceptance_radius_m` | `NAV_ACC_RAD` | Turnaround length; where frames stop before a leg exit |
+   | `climb_m_s`, `descent_m_s` | `MPC_Z_V_AUTO_UP`, `MPC_Z_V_AUTO_DN` | Warned about if slower than the time estimate assumes |
+   | `return_height_m` | `RTL_RETURN_ALT` | Refused above the height limit |
+
+2. Save the field outline as KML or GeoJSON (one polygon, no holes), or point at an
+   existing `.plan` with one Survey.
+
+3. Generate:
+
+   ```bash
+   wr-map survey-plan --boundary field.kml --home 48.40,12.90 --home-amsl-m 450 \
+     --aircraft /data/vehicles/hexa-1.json --gsd-cm 1.0 --relief-m 2 \
+     --flight-time-budget-min 15 --output runs/plans/field-001
+   ```
+
+   - `--gsd-cm` or `--height-m`: exactly one. A GSD is held over the lowest ground.
+   - `--relief-m`: how far the ground rises or falls from take-off level. It must be
+     stated; `0` means level. Overlap and blur are held over the highest ground.
+   - `--target terrain` (default: 80 % forward, 70 % side, one grid) or
+     `--target building` (85 % / 75 %, with the crossing grid). `--front` and `--side`
+     override the overlaps.
+   - `--angle` fixes the leg bearing; without it the shortest flight is chosen.
+   - `--fence-margin-m` (default 20) grows the inclusion fence around every mission point.
+
+The rules it applies:
+
+- **Speed** is the lowest of the motion-blur limit, the forward-overlap limit at the
+  profile frame rate, and the aircraft limit, rounded down to 0.1 m/s. The OAK free-runs,
+  so forward overlap comes from speed, not from a trigger distance. At 30 m the blur
+  limit binds at 4.8 m/s, which gives about 92 % forward overlap.
+- **Lines** are spaced for the side overlap over the highest ground. A line is flown
+  wherever its footprint touches the field and runs past the field at both ends, so the
+  edges get the same number of views as the interior.
+- **Turnarounds** are long enough to reach speed, plus the acceptance radius, plus 2 m.
+- **No camera-trigger commands** are written. QGroundControl adds them back if the
+  Survey is edited there; the check then warns, which is harmless.
+- **The fence** is the convex hull of the take-off point and every mission point, grown
+  by the margin, so it contains every straight transit and the return path.
+
+A plan is written only if it passes both tests:
+
+- `survey-check`, exactly as in section 3, with no warning other than relative height.
+- **The coverage test.** `survey-check` confirms a plan is consistent; it does not
+  confirm that the lines cover the field. The coverage test reads only the finished plan
+  and counts, for every square metre of the original boundary, the lines that see it
+  with enough frames. Frames are counted from each leg entry to the exit less the
+  acceptance radius, at the lowest height above ground. At 70 % / 80 % every point must
+  be seen from 3 lines with 5 frames each.
+
+If the flight does not fit the time budget, nothing is written. The command reports
+the two nearest plans that do fit: a coarser GSD for the same field, and the largest
+area at the requested GSD.
+
+The output directory holds:
+
+| File | Content |
+|---|---|
+| `survey.plan` | The plan to open and upload in QGroundControl. The same inputs give the same bytes |
+| `survey-check.json` | The unmodified check report; `wr-map capture --survey-check` accepts this directory |
+| `review.json` | Inputs with hashes, every derived value and the limit that binds, per-leg table, frame count, flight time against budget, maximum distance from home, warnings |
+| `review.geojson` | Map layers: boundary, survey polygon, fence, path, legs, turnarounds, frame centres, sample footprints, home |
+| `coverage.png` | Lines seeing each ground point: green at or above the requirement, red below |
+| `review.kml` | The layers and the coverage image; open it in Google Earth to see the plan on imagery |
+
+`review.json` also reports what limits the result more than the planning does: the
+speed a halved exposure would allow, rolling-shutter skew per millisecond of readout
+(unmeasured, #14), and the forward overlap if every second or third frame were used.
+
+Open `survey.plan` in QGroundControl, inspect it, and upload it **without editing the
+Survey**. QGroundControl 5.1 uploads a loaded Survey's saved items unchanged, but
+regenerates the lines with its own algorithm on any edit; an edited plan is a
+different plan and must go through section 3 again. Then continue at section 4.
+
+Sections 1 to 3 describe the by-hand route.
 
 ## 1. Enter the camera once in QGroundControl
 
@@ -158,6 +250,11 @@ imported and skipped counts per stream.
   They bound legs to within a fraction of a second, not exposure time.
 - Survey-leg selection does not qualify camera geolocation; timing and rig
   calibration remain separate.
+- Generated plans have not yet been opened in the operator's QGroundControl or flown
+  in PX4 SIH. Coverage assumes a nadir camera, level flight, yaw along each leg and
+  constant speed on the legs; it does not model wind, attitude or tracking error.
+- The coverage test and the edge margins are for one camera height per plan. Terrain
+  following is not generated.
 - Only QGroundControl's Survey pattern is parsed. Plans are tested against MAVSDK's
   QGroundControl-saved sample and synthetic plans that follow QGroundControl 5.1.5's
   save code. A plan saved by the operator's own QGroundControl and a PX4 SIH run of
