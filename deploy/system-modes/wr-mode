@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+# wr-mode - put the Orin into a system profile (home / field / flight)
+# Target: Jetson Orin Nano Super developer kit, JetPack 6. Standalone: needs
+# nothing from this repository once installed (deploy/system-modes/install.sh).
+#
+#   wr-mode status                      what is active right now
+#   wr-mode list                        available profiles
+#   wr-mode apply <profile> [--now] [--dry-run] [--force]
+#   wr-mode <profile> [...]             shorthand for apply
+#   wr-mode check [profile]             exit 0 only if the live state matches
+#   wr-mode ensure [profile] [--force]  recording preflight: apply now, verify
+#   wr-mode baseline                    record service state once (install does it)
+#
+# A profile sets: power mode, fan profile, desktop or headless, Wi-Fi radio,
+# Bluetooth radio, and whether optional services are stopped. Settings persist
+# across reboots. apply switches desktop/headless at next boot unless --now;
+# ensure always switches now. check/ensure default to $WR_MODE_RECORD_PROFILE,
+# else "field".
+#
+# ensure exit codes: 0 ready, 2 usage or invalid profile, 3 reboot required,
+# 4 state did not verify, 5 refused because it would cut an SSH session on Wi-Fi.
+#
+# Never touched, so you can always get back in: ssh, NetworkManager, avahi-daemon,
+# nv-l4t-usb-device-mode (USB-C cable: ssh <user>@192.168.55.1), nvfancontrol.
+
+set -euo pipefail
+
+WR_ETC=${WR_MODE_ETC:-/etc/wr-mode}
+PROFILE_DIR=${WR_MODE_PROFILE_DIR:-$WR_ETC/profiles}
+STATE_FILE=$WR_ETC/current
+BASELINE_FILE=$WR_ETC/baseline
+NVPMODEL_CONF=${WR_MODE_NVPMODEL_CONF:-/etc/nvpmodel.conf}
+FAN_CONF=${WR_MODE_FAN_CONF:-/etc/nvfancontrol.conf}
+FAN_STATUS=${WR_MODE_FAN_STATUS:-/var/lib/nvfancontrol/status}
+RECORD_PROFILE=${WR_MODE_RECORD_PROFILE:-field}
+
+# Stopped and disabled by profiles with TRIM_SERVICES=yes, restored from the
+# baseline otherwise. Only units installed on the system are touched.
+TRIM_UNITS=(
+  cups.service cups-browsed.service cups.socket cups.path
+  ModemManager.service
+  whoopsie.service apport.service kerneloops.service
+  unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer
+  fwupd-refresh.timer motd-news.timer man-db.timer
+)
+# Stopped like the others but never restored: ModemManager probes the PX4
+# serial adapter (deploy/prepare-orin.sh disables it for the same reason).
+NO_RESTORE_UNITS=(ModemManager.service)
+
+DRY_RUN=0
+NOW=0
+FORCE=0
+REBOOT_NEEDED=0
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'wr-mode: %s\n' "$*" >&2; }
+die()  { local code=$1; shift; warn "$*"; exit "$code"; }
+run()  { if (( DRY_RUN )); then printf '  [dry-run] %s\n' "$*"; else "$@"; fi; }
+have() { command -v "$1" >/dev/null 2>&1; }
+need_root() {
+  (( DRY_RUN )) || [[ $EUID -eq 0 || ${WR_MODE_TEST_NONROOT:-} == 1 ]] ||
+    die 2 "run as root: sudo wr-mode $*"
+}
+in_list() { local x=$1; shift; local y; for y in "$@"; do [[ $x == "$y" ]] && return 0; done; return 1; }
+
+usage() {
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+# ------------------------------------------------------------------ profiles
+declare -A P
+
+load_profile() {
+  local name=$1 file key val line k
+  [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || die 2 "invalid profile name '$name'"
+  file="$PROFILE_DIR/$name.conf"
+  [[ -f $file ]] || die 2 "no profile '$name' in $PROFILE_DIR. Try: wr-mode list"
+  P=()
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    [[ $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
+    key=${BASH_REMATCH[1]}
+    val=${BASH_REMATCH[2]}
+    val=${val%"${val##*[![:space:]]}"}
+    val=${val#\"}; val=${val%\"}
+    P[$key]=$val
+  done <"$file"
+  for k in POWER_MODE FAN_PROFILE BOOT WIFI BLUETOOTH TRIM_SERVICES RECORDING; do
+    [[ -n ${P[$k]:-} ]] || die 2 "profile '$name' is missing $k"
+  done
+  [[ ${P[BOOT]} == desktop || ${P[BOOT]} == headless ]] || die 2 "$name: BOOT must be desktop or headless"
+  [[ ${P[WIFI]} == on || ${P[WIFI]} == off ]] || die 2 "$name: WIFI must be on or off"
+  [[ ${P[BLUETOOTH]} == on || ${P[BLUETOOTH]} == off ]] || die 2 "$name: BLUETOOTH must be on or off"
+  [[ ${P[TRIM_SERVICES]} == yes || ${P[TRIM_SERVICES]} == no ]] || die 2 "$name: TRIM_SERVICES must be yes or no"
+  [[ ${P[RECORDING]} == yes || ${P[RECORDING]} == no ]] || die 2 "$name: RECORDING must be yes or no"
+}
+
+list_profiles() {
+  local f name desc found=0
+  for f in "$PROFILE_DIR"/*.conf; do
+    [[ -e $f ]] || continue
+    found=1
+    name=$(basename "$f" .conf)
+    desc=$(sed -nE 's/^DESCRIPTION[[:space:]]*=[[:space:]]*"?([^"]*)"?.*/\1/p' "$f")
+    printf '  %-8s %s\n' "$name" "$desc"
+  done
+  (( found )) || say "no profiles in $PROFILE_DIR"
+}
+
+# ------------------------------------------------------------------ power mode
+power_mode_id() {   # name -> id from nvpmodel.conf
+  sed -nE "s/^<[[:space:]]*POWER_MODEL[[:space:]]+ID=([0-9]+)[[:space:]]+NAME=$1[[:space:]]*>.*/\1/p" \
+    "$NVPMODEL_CONF" | head -n1
+}
+power_mode_names() {
+  sed -nE 's/^<[[:space:]]*POWER_MODEL[[:space:]]+ID=[0-9]+[[:space:]]+NAME=([^[:space:]>]+).*/\1/p' \
+    "$NVPMODEL_CONF" | paste -sd' ' -
+}
+power_mode_current() {
+  nvpmodel -q 2>/dev/null | sed -nE 's/^NV Power Mode:[[:space:]]*(.*)$/\1/p' | head -n1
+}
+
+apply_power() {
+  local want=$1 id cur out
+  id=$(power_mode_id "$want")
+  cur=$(power_mode_current || true)
+  if [[ $cur == "$want" ]]; then say "power     $want (unchanged)"; return; fi
+  say "power     ${cur:-unknown} -> $want"
+  if (( DRY_RUN )); then printf '  [dry-run] nvpmodel -m %s\n' "$id"; return; fi
+  # nvpmodel asks before rebooting on some mode changes: answer no, report it.
+  out=$(printf 'no\n' | nvpmodel -m "$id" 2>&1 || true)
+  if grep -qi 'reboot' <<<"$out"; then REBOOT_NEEDED=1; fi
+}
+
+# ------------------------------------------------------------------ fan
+fan_current() {
+  sed -nE 's/^[[:space:]]*FAN_DEFAULT_PROFILE[[:space:]]+([A-Za-z0-9_]+).*/\1/p' "$FAN_CONF" | head -n1
+}
+fan_has_profile() {
+  grep -qE "^[[:space:]]*FAN_PROFILE[[:space:]]+$1[[:space:]]*\{" "$FAN_CONF"
+}
+
+apply_fan() {
+  local want=$1 cur
+  cur=$(fan_current)
+  if [[ $cur == "$want" ]]; then say "fan       $want (unchanged)"; return; fi
+  say "fan       $cur -> $want"
+  run sed -i -E "s/^([[:space:]]*FAN_DEFAULT_PROFILE[[:space:]]+)[A-Za-z0-9_]+/\1$want/" "$FAN_CONF"
+  run systemctl stop nvfancontrol
+  run rm -f "$FAN_STATUS"
+  run systemctl start nvfancontrol
+}
+
+# ------------------------------------------------------------------ services
+unit_exists() { [[ -n $(systemctl list-unit-files --no-legend "$1" 2>/dev/null) ]]; }
+unit_state()  { systemctl is-enabled "$1" 2>/dev/null || true; }
+
+record_baseline() {
+  if [[ -f $BASELINE_FILE ]]; then say "baseline  already recorded in $BASELINE_FILE"; return; fi
+  local u tmp
+  tmp=$(mktemp)
+  for u in "${TRIM_UNITS[@]}"; do
+    unit_exists "$u" || continue
+    printf '%s %s\n' "$u" "$(unit_state "$u")" >>"$tmp"
+  done
+  if (( DRY_RUN )); then
+    say "  [dry-run] would record baseline:"; sed 's/^/    /' "$tmp"; rm -f "$tmp"; return
+  fi
+  mkdir -p "$(dirname "$BASELINE_FILE")"
+  mv "$tmp" "$BASELINE_FILE"
+  chmod 0644 "$BASELINE_FILE"
+  say "baseline  recorded $(wc -l <"$BASELINE_FILE") units in $BASELINE_FILE"
+}
+
+apply_services() {
+  local trim=$1 u st n=0
+  if [[ $trim == yes ]]; then
+    for u in "${TRIM_UNITS[@]}"; do
+      unit_exists "$u" || continue
+      st=$(unit_state "$u")
+      [[ $st == enabled ]] || continue
+      run systemctl disable --now "$u" >/dev/null 2>&1 || warn "could not disable $u"
+      n=$((n + 1))
+    done
+    say "services  stopped $n"
+  else
+    [[ -f $BASELINE_FILE ]] || { say "services  no baseline, nothing to restore"; return; }
+    while read -r u st; do
+      [[ -n $u && $st == enabled ]] || continue
+      in_list "$u" "${NO_RESTORE_UNITS[@]}" && continue
+      [[ $(unit_state "$u") == enabled ]] && continue
+      run systemctl enable --now "$u" >/dev/null 2>&1 || warn "could not enable $u"
+      n=$((n + 1))
+    done <"$BASELINE_FILE"
+    say "services  restored $n"
+  fi
+}
+
+# ------------------------------------------------------------------ radios
+wifi_current() { nmcli radio wifi 2>/dev/null || echo unknown; }
+bluetooth_current() {
+  have rfkill || { echo unknown; return; }
+  if rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: yes'; then echo off; else echo on; fi
+}
+
+ssh_over_wifi() {   # true if a live ssh session arrived on a wl* interface
+  local addrs local_ip
+  addrs=$(ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^wl/ {split($4, a, "/"); print a[1]}')
+  [[ -n $addrs ]] || return 1
+  while read -r local_ip; do
+    [[ -n $local_ip ]] || continue
+    local_ip=${local_ip%:*}; local_ip=${local_ip#[}; local_ip=${local_ip%]}; local_ip=${local_ip#::ffff:}
+    grep -qxF "$local_ip" <<<"$addrs" && return 0
+  done < <(ss -tnH state established '( sport = :22 )' 2>/dev/null | awk '{print $3}')
+  return 1
+}
+
+apply_wifi() {
+  local want=$1 cur
+  cur=$(wifi_current)
+  if [[ ($want == on && $cur == enabled) || ($want == off && $cur == disabled) ]]; then
+    say "wifi      $want (unchanged)"; return
+  fi
+  say "wifi      $cur -> $want"
+  run nmcli radio wifi "$want"
+}
+
+apply_bluetooth() {
+  local want=$1
+  have rfkill || { say "bluetooth rfkill not found, skipped"; return; }
+  if [[ $(bluetooth_current) == "$want" ]]; then say "bluetooth $want (unchanged)"; return; fi
+  say "bluetooth $want"
+  if [[ $want == off ]]; then run rfkill block bluetooth; else run rfkill unblock bluetooth; fi
+}
+
+# ------------------------------------------------------------------ desktop / headless
+desktop_running() { systemctl is-active --quiet display-manager.service; }
+
+apply_boot() {
+  local want=$1 target cur
+  target=$([[ $want == desktop ]] && echo graphical.target || echo multi-user.target)
+  cur=$(systemctl get-default)
+  if [[ $cur == "$target" ]]; then
+    say "boot      $want (unchanged)"
+  else
+    say "boot      $cur -> $target"
+    run systemctl set-default "$target" >/dev/null
+  fi
+  local running=headless
+  desktop_running && running=desktop
+  [[ $running == "$want" ]] && return
+  if (( ! NOW )); then
+    say "          takes effect at next boot (or re-run with --now)"; return
+  fi
+  # Start or stop only the display manager. 'systemctl isolate' would also stop
+  # any unit not wanted by the target, including a recording started by hand.
+  say "          switching now"
+  if [[ $want == headless ]]; then
+    run systemctl stop display-manager.service
+  else
+    run systemctl start --no-block graphical.target
+  fi
+}
+
+# ------------------------------------------------------------------ check
+check_state() {   # prints mismatches, returns non-zero if any
+  local name=$1 bad=0 u cur
+  cur=$(power_mode_current || true)
+  [[ $cur == "${P[POWER_MODE]}" ]] || { say "  power mode is ${cur:-unknown}, want ${P[POWER_MODE]}"; bad=1; }
+  cur=$(fan_current)
+  [[ $cur == "${P[FAN_PROFILE]}" ]] || { say "  fan profile is $cur, want ${P[FAN_PROFILE]}"; bad=1; }
+  cur=$(wifi_current)
+  if [[ ${P[WIFI]} == on && $cur != enabled ]] || [[ ${P[WIFI]} == off && $cur != disabled ]]; then
+    say "  wifi is $cur, want ${P[WIFI]}"; bad=1
+  fi
+  cur=$(bluetooth_current)
+  [[ $cur == unknown || $cur == "${P[BLUETOOTH]}" ]] || { say "  bluetooth is $cur, want ${P[BLUETOOTH]}"; bad=1; }
+  if [[ ${P[BOOT]} == headless ]]; then
+    desktop_running && { say "  desktop is running, want headless"; bad=1; }
+    [[ $(systemctl get-default) == multi-user.target ]] || { say "  boots to desktop, want headless"; bad=1; }
+  else
+    [[ $(systemctl get-default) == graphical.target ]] || { say "  boots headless, want desktop"; bad=1; }
+  fi
+  if [[ ${P[TRIM_SERVICES]} == yes ]]; then
+    for u in "${TRIM_UNITS[@]}"; do
+      unit_exists "$u" || continue
+      if [[ $(unit_state "$u") == enabled ]] || systemctl is-active --quiet "$u"; then
+        say "  $u is still enabled or running"; bad=1
+      fi
+    done
+  fi
+  if (( bad )); then say "not in '$name'"; return 1; fi
+  say "in '$name'"
+}
+
+# ------------------------------------------------------------------ commands
+validate() {   # everything is checked before anything changes
+  local name=$1
+  [[ -f $NVPMODEL_CONF ]] || die 2 "$NVPMODEL_CONF not found"
+  [[ -n $(power_mode_id "${P[POWER_MODE]}") ]] ||
+    die 2 "power mode '${P[POWER_MODE]}' is not on this board. Available: $(power_mode_names)"
+  [[ -f $FAN_CONF ]] || die 2 "$FAN_CONF not found"
+  fan_has_profile "${P[FAN_PROFILE]}" || die 2 "fan profile '${P[FAN_PROFILE]}' is not in $FAN_CONF"
+  if [[ ${P[WIFI]} == off ]] && ssh_over_wifi && (( ! FORCE )); then
+    die 5 "you are connected over Wi-Fi and '$name' turns Wi-Fi off. Reconnect with the USB-C cable (ssh <user>@192.168.55.1) or add --force."
+  fi
+}
+
+cmd_apply() {
+  local name=$1
+  load_profile "$name"
+  need_root apply "$name"
+  validate "$name"
+  [[ -f $BASELINE_FILE ]] || record_baseline
+
+  say "applying '$name'${P[DESCRIPTION]:+: ${P[DESCRIPTION]}}"
+  apply_power "${P[POWER_MODE]}"
+  apply_fan "${P[FAN_PROFILE]}"
+  apply_services "${P[TRIM_SERVICES]}"
+  apply_bluetooth "${P[BLUETOOTH]}"
+  apply_wifi "${P[WIFI]}"
+  apply_boot "${P[BOOT]}"          # last: --now ends a desktop session
+
+  if (( ! DRY_RUN )); then
+    mkdir -p "$(dirname "$STATE_FILE")"
+    printf '%s\n' "$name" >"$STATE_FILE"
+  fi
+  if (( REBOOT_NEEDED )); then say "power mode change needs a reboot: sudo reboot"; fi
+}
+
+cmd_check() {
+  local name=${1:-$RECORD_PROFILE}
+  load_profile "$name"
+  check_state "$name"
+}
+
+cmd_ensure() {
+  local name=${1:-$RECORD_PROFILE}
+  load_profile "$name"
+  [[ ${P[RECORDING]} == yes ]] || die 2 "'$name' is not a recording profile (RECORDING=no)"
+  (( ! DRY_RUN )) || die 2 "ensure has no dry run; use: wr-mode apply $name --dry-run"
+  NOW=1
+  cmd_apply "$name"
+  (( ! REBOOT_NEEDED )) || die 3 "'$name' needs a reboot before recording: sudo reboot"
+  check_state "$name" || die 4 "the system did not reach '$name'; not safe to record"
+}
+
+cmd_status() {
+  local mode off=0 total=0 u
+  mode=$(cat "$STATE_FILE" 2>/dev/null || echo "none set")
+  for u in "${TRIM_UNITS[@]}"; do
+    unit_exists "$u" || continue
+    total=$((total + 1))
+    [[ $(unit_state "$u") == enabled ]] || off=$((off + 1))
+  done
+  printf '%-10s %s\n' profile "$mode"
+  printf '%-10s %s\n' power "$(power_mode_current || echo unknown)"
+  printf '%-10s %s\n' fan "$(fan_current 2>/dev/null || echo unknown)"
+  printf '%-10s boots %s, desktop %s\n' boot "$(systemctl get-default)" \
+    "$(desktop_running && echo running || echo stopped)"
+  printf '%-10s %s\n' wifi "$(wifi_current)"
+  printf '%-10s %s\n' bluetooth "$(bluetooth_current)"
+  printf '%-10s %s of %s optional units off\n' services "$off" "$total"
+  printf '%-10s ssh %s, usb-c link %s\n' access "$(systemctl is-active ssh 2>/dev/null || true)" \
+    "$(systemctl is-active nv-l4t-usb-device-mode 2>/dev/null || true)"
+  ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wl|l4tbr|eth|en)/ {printf "%-10s %s %s\n", "address", $2, $4}'
+}
+
+main() {
+  [[ $# -gt 0 ]] || usage 2
+  local cmd=$1; shift
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --dry-run) DRY_RUN=1 ;;
+      --now) NOW=1 ;;
+      --force) FORCE=1 ;;
+      -h|--help) usage 0 ;;
+      -*) die 2 "unknown option $1" ;;
+      *) args+=("$1") ;;
+    esac
+    shift
+  done
+  case $cmd in
+    status)   cmd_status ;;
+    list)     list_profiles ;;
+    baseline) need_root baseline; record_baseline ;;
+    apply)    [[ ${#args[@]} -eq 1 ]] || usage 2; cmd_apply "${args[0]}" ;;
+    check)    [[ ${#args[@]} -le 1 ]] || usage 2; cmd_check "${args[@]}" ;;
+    ensure)   [[ ${#args[@]} -le 1 ]] || usage 2; cmd_ensure "${args[@]}" ;;
+    help)     usage 0 ;;
+    *)        [[ ${#args[@]} -eq 0 ]] || usage 2; cmd_apply "$cmd" ;;
+  esac
+}
+
+main "$@"

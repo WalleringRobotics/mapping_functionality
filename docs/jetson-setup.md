@@ -157,6 +157,9 @@ Wait for `state=complete` before removing power; sealing large bags takes time.
 Automatic restart is disabled. Check final state and validation before removing
 power.
 
+To force the Orin into its recording profile (headless, 15 W, radios as set) before
+the service records, install [system modes](system-modes.md).
+
 ## Transfer
 
 Copy the entire finalized directory with `rsync -a --partial`, then validate the

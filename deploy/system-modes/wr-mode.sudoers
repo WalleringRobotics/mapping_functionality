@@ -1,0 +1,6 @@
+# Installed by install.sh as /etc/sudoers.d/wr-mode (mode 0440).
+# Members of the wr-mode group may run the recording preflight without a
+# password, so a recorder started as a normal user can force the mode:
+#   sudo -n /usr/local/sbin/wr-mode ensure field
+# Only ensure is allowed; apply still asks for a password.
+%wr-mode ALL=(root) NOPASSWD: /usr/local/sbin/wr-mode ensure, /usr/local/sbin/wr-mode ensure *
