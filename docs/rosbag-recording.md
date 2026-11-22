@@ -65,8 +65,17 @@ free-space reserve. At these dimensions, expect approximately 78 MB/s, 4.4 GiB/m
 and 260 GiB/hour. Benchmark the actual disk and budget the run length accordingly.
 
 One-shot startup checks verify camera-info/IMU arrival and PX4 connection,
-saves effective parameters, and refuses a second `/oak` or MAVROS owner. An owner
-using a different node name/domain still needs to be stopped manually. It checks
+save effective parameters, and refuse a second `/oak` or MAVROS owner. An owner
+using a different node name/domain still needs to be stopped manually. The
+checks run in one ROS process and record their timing in `readiness.json`. A
+ROS CLI call per check took about 50 s on the Orin: each call repeated discovery,
+and `ros2 param dump` requests parameters one at a time. The owner check waits
+2 s for discovery; running drivers appeared within 0.8 s on 2026-11-22.
+A MAVROS started with the session (`--start-mavros`) needs about a minute to
+settle. On 2026-11-22 PX4 IMU messages had gaps up to 45 s after MAVROS
+started, and the timing gate needs about 50 s of TIMESYNC samples. The slow
+checks used to hide this. Use `--warmup 60`, as field recordings do, so
+acquisition starts after it. It checks
 process exits through ROS launch events and disk reserve through a launch timer. Offline validation detects
 required-stream stalls; process health alone does not establish stream health.
 Warmup runs with rosbag already recording, retaining pre-roll for discovery.
@@ -113,7 +122,10 @@ user unit `wr-field-record`. It uses a 60 s warmup and records until stopped
 unless `--duration` is given. Unplugging or logging out does not stop it. This
 needs `loginctl enable-linger` for the user, but not root.
 
-`start` returns only after the startup checks pass, which takes about 40 s.
+`start` returns only after the startup checks pass, which takes about 10 s.
+On 2026-11-22 it took 10.7 s: 1.5 s to start the container, 2.5 s for the owner
+check, 0.5 s for launch, and 5.3 s for the OAK to boot and publish. Before
+that it took 55 s.
 Ctrl+C or Ctrl+Z there only stops the waiting; `status` reports the session
 state. If the checks fail, `start` stops the unit and reports the failure.
 Running `stop` while the state is still `starting` aborts the session, which

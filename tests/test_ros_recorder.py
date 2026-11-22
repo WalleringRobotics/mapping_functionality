@@ -51,18 +51,43 @@ if Path(sys.argv[0]).name == 'camera_node' or args[:2] == ['bag', 'record']:
         sys.exit(0)
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
+    tick = lambda: time.sleep(.05)
+    if kind == 'publisher' and mode != 'preflight_failure':
+        # Stand in for the driver (and, with announcements, MAVROS) on the real
+        # ROS graph, which the readiness check reads directly.
+        import rclpy
+        from rclpy.executors import SingleThreadedExecutor
+        from rclpy.parameter import Parameter
+        from rclpy.signals import SignalHandlerOptions
+        from sensor_msgs.msg import CameraInfo, Imu
+        rclpy.init(args=sys.argv, signal_handler_options=SignalHandlerOptions.NO)
+        oak = rclpy.create_node('oak', automatically_declare_parameters_from_overrides=True)
+        streams = [(oak.create_publisher(CameraInfo, f'/oak/{c}/camera_info', 1), CameraInfo)
+                   for c in ('rgb', 'left', 'right')] + [(oak.create_publisher(Imu, '/oak/imu/data', 1), Imu)]
+        nodes = [oak]
+        if mode.startswith('announce'):
+            from mavros_msgs.msg import State
+            # Launch's global __node remap names the driver; keep it off this node.
+            time_node = rclpy.create_node(
+                'time', namespace='/mavros', use_global_arguments=False,
+                parameter_overrides=[Parameter('timesync_mode', value='MAVLINK')],
+                automatically_declare_parameters_from_overrides=True)
+            nodes.append(time_node)
+            streams.append((time_node.create_publisher(State, '/mavros/state', 1),
+                            lambda: State(connected=True)))
+        executor = SingleThreadedExecutor()
+        for ros_node in nodes:
+            executor.add_node(ros_node)
+        def tick():
+            for publisher, message in streams:
+                publisher.publish(message())
+            executor.spin_once(timeout_sec=.05)
     while True:
-        time.sleep(.05)
+        tick()
         if ((mode == 'driver_failure' and kind == 'publisher') or
             (mode == 'recorder_failure' and kind == 'recorder')):
             if (root/'session/acquisition-start-ns.txt').exists():
                 sys.exit(7)
-elif args[:2] == ['param', 'dump']:
-    print('/oak: {ros__parameters: {}}')
-elif args[:2] == ['topic', 'echo']:
-    if mode.startswith('announce') and '/mavros/state' in args:
-        print('connected: true')
-    sys.exit(4 if mode == 'preflight_failure' else 0)
 elif args[:2] == ['bag', 'info']:
     assert not any(Path('/proc', pid).exists() for pid in (root/'pids').read_text().splitlines())
     print('Lifecycle fixture bag')
@@ -72,7 +97,9 @@ elif args[:2] == ['bag', 'info']:
     output = tmp_path / 'session'
     env = {**os.environ, 'PATH': f'{tmp_path}:{os.environ["PATH"]}',
            'AMENT_PREFIX_PATH': f'{tmp_path}:{os.environ.get("AMENT_PREFIX_PATH", "")}',
-           'WR_TEST_ROOT': str(tmp_path), 'WR_TEST_MODE': mode, 'WR_TEST_ROS2': real_ros2}
+           'WR_TEST_ROOT': str(tmp_path), 'WR_TEST_MODE': mode, 'WR_TEST_ROS2': real_ros2,
+           # Keep this graph away from a live recorder; a silent driver fails readiness quickly.
+           'ROS_DOMAIN_ID': str(50 + os.getpid() % 40), 'WR_MAPPING_READY_TIMEOUT': '5'}
     command = ['bash', 'deploy/record-rosbag.sh', '--output', str(output),
         '--camera-only', '--warmup', '0', '--duration', '1' if mode == 'timed' else '0']
     if mode == 'calibration_interrupt':

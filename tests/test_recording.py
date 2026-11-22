@@ -5,7 +5,7 @@ import pytest
 
 from wallering_mapping.cli import parser
 from wallering_mapping.recording import (
-    CALIBRATION_DURATION, CALIBRATION_PHASES, phase_record, request_imu_rate,
+    CALIBRATION_DURATION, CALIBRATION_PHASES, nest_parameters, phase_record, request_imu_rate,
 )
 
 
@@ -129,3 +129,12 @@ def test_recorder_refuses_survey_and_announce_misuse_before_ros(tmp_path, extra,
                              str(tmp_path / "session"), *extra], capture_output=True, text=True)
     assert result.returncode == 2 and message in result.stderr
     assert not (tmp_path / "session").exists()
+
+
+def test_parameters_nest_like_ros2_param_dump_for_validation():
+    # bags.py reads oak-parameters.yaml as ["/oak"]["ros__parameters"]["rgb"]["i_fps"].
+    names = ["camera.i_pipeline_type", "imu.i_sync_method", "rgb.i_fps", "use_sim_time"]
+    tree = nest_parameters(names, ["RGBStereo", "COPY", 30.0, False])
+    assert tree == {"camera": {"i_pipeline_type": "RGBStereo"}, "imu": {"i_sync_method": "COPY"},
+                    "rgb": {"i_fps": 30.0}, "use_sim_time": False}
+    assert nest_parameters(["a.b.c", "a.d"], [1, 2]) == {"a": {"b": {"c": 1}, "d": 2}}

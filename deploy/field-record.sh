@@ -16,7 +16,7 @@ field_report() {
   [[ -n "$session" ]] || { echo "No field recording yet"; return; }
   state="$(cat "$session/state" 2>/dev/null || echo unknown)"
   case "$state" in
-    starting) state+=" (startup checks, about 40 s; not yet safe to unplug)" ;;
+    starting) state+=" (startup checks, about 10 s; not yet safe to unplug)" ;;
     warming|recording) state+=" (recording; safe to unplug)" ;;
     postroll|stopping) state+=" (stopping; keep power on)" ;;
     complete) state+=" (sealed; safe to power off)" ;;
@@ -71,9 +71,10 @@ case "${1:-}" in
       --warmup "${WR_MAPPING_WARMUP:-60}" --start-mavros --announce "${field_args[@]}"
     ln -sfn "$field_output" "$field_root/latest"
     echo "Starting $field_output"
-    echo "Waiting for the startup checks (about 40 s). Ctrl+C only stops waiting; check with status."
+    echo "Waiting for the startup checks (about 10 s). Ctrl+C only stops waiting; check with status."
     # Report success only after the startup checks pass, so unplugging is safe.
-    for ((field_wait = 0; field_wait < field_ready_seconds; field_wait++)); do
+    field_deadline=$((SECONDS + field_ready_seconds))
+    while ((SECONDS < field_deadline)); do
       case "$(cat "$field_output/state" 2>/dev/null || true)" in
         warming|recording)
           echo "Startup checks passed; recording continues after you unplug."
@@ -82,7 +83,7 @@ case "${1:-}" in
         failed) break ;;
       esac
       systemctl --user is-active --quiet "$field_unit" || break
-      sleep 1
+      sleep 0.2
     done
     echo "Recording did not start; see $field_output.log" >&2
     systemctl --user stop "$field_unit" 2>/dev/null || true
