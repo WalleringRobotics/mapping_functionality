@@ -40,6 +40,9 @@ def test_field_start_detaches_with_clean_stop_and_waits_for_readiness(tmp_path):
     for expected in ("KillSignal=SIGINT", "TimeoutStopSec=infinity", "WR_MAPPING_SERIAL_DEVICE=/dev/fake",
                      "--start-mavros", "--announce"):
         assert expected in run
+    # This host keeps no user journal; the unit's output must land beside the session.
+    session = (tmp_path / "field" / "latest").resolve()
+    assert f"StandardOutput=append:{session}.log" in run
     # The operator's duration follows the unbounded default, so argparse uses it.
     durations = [run[i + 1] for i, arg in enumerate(run) if arg == "--duration"]
     assert durations == ["0", "900"]

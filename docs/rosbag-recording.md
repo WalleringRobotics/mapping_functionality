@@ -113,17 +113,25 @@ user unit `wr-field-record`. It uses a 60 s warmup and records until stopped
 unless `--duration` is given. Unplugging or logging out does not stop it. This
 needs `loginctl enable-linger` for the user, but not root.
 
-`start` returns only after the startup checks pass. If they fail, it stops the
-unit and reports the failure. Sessions go under ignored `runs/field/`, and
-`runs/field/latest` points at the newest one.
+`start` returns only after the startup checks pass, which takes about 40 s.
+Ctrl+C or Ctrl+Z there only stops the waiting; `status` reports the session
+state. If the checks fail, `start` stops the unit and reports the failure.
+Running `stop` while the state is still `starting` aborts the session, which
+is then marked `failed`.
+
+Sessions go under ignored `runs/field/`, and `runs/field/latest` points at the
+newest one. Each session's output goes to `runs/field/<session>.log`, because
+this host keeps no user journal.
 
 `stop` sends SIGINT, the recorder's clean stop. On 2026-11-22, a 30 s field
-session sealed in about 20 s.
+session sealed in about 20 s. Removing power before `stop` returns leaves the
+session unsealed.
 
-QGroundControl shows the start announcement. A manual stop shuts down the
-session's MAVROS at the same time, so the stop announcement is not delivered;
-`stop` prints the final state instead. Removing power before `stop` returns
-leaves the session unsealed.
+The start announcement plays on the vehicle buzzer when warmup ends. Its text
+reaches QGroundControl only if PX4 forwards the Orin's messages
+(`MAV_1_FORWARD`), which is 0 on this vehicle as of 2026-11-22. A manual stop
+shuts down the session's MAVROS at the same time, so no stop announcement is
+sent; `stop` prints the final state instead.
 
 Without a network, the Orin keeps the clock it booted with. `/mavros/time_reference`
 records PX4's GPS time alongside it.
