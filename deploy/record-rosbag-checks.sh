@@ -11,11 +11,13 @@ for topic in /oak/rgb/camera_info /oak/left/camera_info /oak/right/camera_info /
 done
 # Resolve the current session's nodes directly instead of sharing persistent
 # ROS CLI daemon discovery state with other commands in the same DDS domain.
-timeout 15 ros2 param dump /oak --no-daemon > "$bag_output/oak-parameters.yaml"
+# The CLI default waits 0.5 s for discovery, which intermittently missed /oak;
+# parameter services on the busy driver took up to 10 s more on the Orin.
+timeout 30 ros2 param dump /oak --no-daemon --spin-time 5 > "$bag_output/oak-parameters.yaml"
 if [[ "$bag_camera_only" == false ]]; then
   timeout 30 ros2 topic echo /mavros/state mavros_msgs/msg/State --once --filter 'm.connected' > "$bag_output/mavros-state.yaml"
   grep -q 'connected: true' "$bag_output/mavros-state.yaml" || { echo "PX4 is not connected" >&2; exit 2; }
-  timeout 15 ros2 param dump /mavros/time --no-daemon > "$bag_output/mavros-time.yaml"
+  timeout 30 ros2 param dump /mavros/time --no-daemon --spin-time 5 > "$bag_output/mavros-time.yaml"
   # Record the mission PX4 holds for a checked survey plan (read-only download).
   if [[ -f "$bag_output/survey.plan" ]]; then
     python3 "$bag_output/recording.py" --pull-mission --report "$bag_output/mission-pull.json" ||
@@ -25,7 +27,7 @@ if [[ "$bag_camera_only" == false ]]; then
     python3 "$bag_output/recording.py" --rate "$bag_px4_rate" --report "$bag_output/px4-rate-request.json"
   fi
 fi
-timeout 15 ros2 topic list -t --no-daemon > "$bag_output/graph.txt"
+timeout 15 ros2 topic list -t --no-daemon --spin-time 5 > "$bag_output/graph.txt"
 # Preserve the vendor calibration dump without exposing identity in source files.
 for calibration in /tmp/*_calibration.json; do
   if [[ -f "$calibration" && "$calibration" -nt "$bag_output/started-utc.txt" ]]; then
