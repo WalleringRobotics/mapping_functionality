@@ -124,12 +124,11 @@ def design(spec, profile, aircraft, *, relief_m, gsd_cm=None, height_m=None, tar
     turnaround = round(round_up(speed ** 2 / (2 * aircraft["accel_m_s2"]) + radius
                                 + TURNAROUND_MARGIN_M, 0.1), 1)
     # Smallest margins that give an edge point the interior's minimum number of views.
-    # Across: the outermost line may sit up to half a spacing inside the buffered edge.
-    across_margin = min(across_low / 2 + spacing / 2,
-                        max(0.0, (lines_needed - 0.5) * spacing - across_low / 2)) + EDGE_ALLOWANCE_M
+    # Across: lines continue this far past the field's sides; each line is flown wherever
+    # its footprint touches the field.
+    across_extent = max(0.0, (lines_needed - 1) * spacing - across_low / 2) + EDGE_ALLOWANCE_M
     # Along: frames count from the leg entry to the exit less the acceptance radius.
-    along_margin = min(along_low / 2 + radius,
-                       max(radius, frames_needed * frame_spacing - along_low / 2 + radius)) + EDGE_ALLOWANCE_M
+    along_margin = max(radius, frames_needed * frame_spacing - along_low / 2 + radius) + EDGE_ALLOWANCE_M
 
     def thinned(step):
         return 100 * (1 - step * frame_spacing / along_low)
@@ -148,7 +147,7 @@ def design(spec, profile, aircraft, *, relief_m, gsd_cm=None, height_m=None, tar
         "front_overlap_worst": thinned(1), "blur_px_worst": speed * exposure_s / gsd_low,
         "lines_needed": lines_needed, "frames_needed": frames_needed,
         "turnaround_m": turnaround, "acceleration_distance_m": speed ** 2 / (2 * aircraft["accel_m_s2"]),
-        "across_margin_m": across_margin, "along_margin_m": along_margin,
+        "across_extent_m": across_extent, "along_margin_m": along_margin,
         "sensitivities": {
             "speed_at_half_exposure_m_s": min(2 * speed_limits["blur"], speed_limits["forward_overlap"],
                                               speed_limits["aircraft"]),

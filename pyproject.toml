@@ -16,6 +16,7 @@ oak = ["depthai==3.10.0"]
 processing = ["pycolmap==3.12.6"]
 terrain = ["pyproj==3.7.1"]
 diagnostics = ["pyserial==3.5", "pymavlink==2.4.50"]
+planner = ["shapely>=2,<3", "ruamel.yaml>=0.17"]
 dev = ["pytest>=8,<9", "ruff>=0.9,<1"]
 
 [project.scripts]
