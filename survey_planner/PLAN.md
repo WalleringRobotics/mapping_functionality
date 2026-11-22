@@ -245,13 +245,18 @@ network or vehicle IO.
      results
    - downloading the `.plan` and the `.kml`
 
-   **Imagery source.** Google's terms allow its map tiles only through its own Maps
-   JavaScript API, which needs an API key with billing enabled; they cannot be loaded
-   into Leaflet directly. The page therefore takes a configurable imagery provider:
-   - a keyless satellite layer as the default (Esri World Imagery; licence terms to be
-     confirmed in Phase 2)
-   - Google Maps satellite when a Maps API key is set in the environment
-   - no basemap when offline: every layer still draws, on a plain background
+   **Imagery source.** The first version uses one keyless satellite layer (Esri World
+   Imagery; licence terms to be confirmed in Phase 2). Without a connection every
+   layer still draws, on a plain background. The provider is a single setting, so
+   keyed providers can be added later without changing the page:
+   - Bing aerial, which is QGroundControl's default map (Bing, Hybrid) and so the
+     closest match to what the operator sees there
+   - Google Maps satellite, which Google allows only through its own Maps JavaScript
+     API with a billed key
+
+   The basemap is a backdrop only. Providers can differ by a few metres, so a boundary
+   traced on one may look shifted on another; the coordinates in the plan are what the
+   aircraft flies.
 
    Independently of the page, `review.kml` opens in Google Earth, which shows the plan
    on Google imagery with 3D terrain and needs no key.
@@ -351,6 +356,7 @@ Upload and arming, airspace or site approval, terrain following in v1, ArduPilot
 | Trigger commands | Omitted (rule 14) |
 | Built-in agent | Deferred |
 | Transect algorithm | Our own; QGroundControl uploads saved items as they are |
+| Map imagery | One keyless satellite layer in the first version; Bing and Google as later keyed options |
 
 ## Questions for the reviewer
 
@@ -359,9 +365,6 @@ Upload and arming, airspace or site approval, terrain following in v1, ArduPilot
 2. **Home elevation and relief:** both required inputs in v1, as proposed, or looked
    up from a DEM?
 3. **Fence margin:** default 20 m around the convex hull?
-4. **Map imagery:** is the keyless satellite layer plus `review.kml` for Google Earth
-   enough, or should Google Maps in the page (with your own Maps API key and billing)
-   be built in Phase 2?
-5. **Shapely** as an optional dependency for buffering concave boundaries, or refuse
+4. **Shapely** as an optional dependency for buffering concave boundaries, or refuse
    concave fields in v1 and avoid the dependency?
-6. **PR split:** one PR per phase, as proposed?
+5. **PR split:** one PR per phase, as proposed?

@@ -123,5 +123,5 @@ Summarised from the operator's own request:
 ## Still open
 
 PLAN.md was revised after design review on 2026-11-22: placement, edge margin, trigger
-commands and the built-in agent are decided there. Six questions remain at its end.
+commands, the built-in agent and map imagery are decided there. Five questions remain at its end.
 Check PR #33 for the operator's answers before starting Phase 1.
