@@ -65,17 +65,16 @@ free-space reserve. At these dimensions, expect approximately 78 MB/s, 4.4 GiB/m
 and 260 GiB/hour. Benchmark the actual disk and budget the run length accordingly.
 
 One-shot startup checks verify camera-info/IMU arrival and PX4 connection,
-save effective parameters, and refuse a second `/oak` or MAVROS owner. An owner
+require 5 s in which every camera, the OAK IMU and the PX4 IMU kept arriving
+(a stall is three missed frames or 0.25 s without IMU samples, and restarts the
+5 s), save effective parameters, and refuse a second `/oak` or MAVROS owner. An owner
 using a different node name/domain still needs to be stopped manually. The
 checks run in one ROS process and record their timing in `readiness.json`. A
 ROS CLI call per check took about 50 s on the Orin: each call repeated discovery,
 and `ros2 param dump` requests parameters one at a time. The owner check waits
 2 s for discovery; running drivers appeared within 0.8 s on 2026-11-22.
-A MAVROS started with the session (`--start-mavros`) needs about a minute to
-settle. On 2026-11-22 PX4 IMU messages had gaps up to 45 s after MAVROS
-started, and the timing gate needs about 50 s of TIMESYNC samples. The slow
-checks used to hide this. Use `--warmup 60`, as field recordings do, so
-acquisition starts after it. It checks
+The PX4 timing gate needs 501 consecutive good TIMESYNC samples, about 50 s at
+10 Hz, so a recording shorter than that cannot qualify. It checks
 process exits through ROS launch events and disk reserve through a launch timer. Offline validation detects
 required-stream stalls; process health alone does not establish stream health.
 Warmup runs with rosbag already recording, retaining pre-roll for discovery.
@@ -112,22 +111,24 @@ port: on USB-C it takes the host role and blocks the laptop link.
 ssh <user>@192.168.55.1
 cd <this checkout>
 bash deploy/field-record.sh start   # optional: --duration SECONDS, --survey-check DIR
-# Unplug after "Startup checks passed". After landing, reconnect:
+# Unplug after "ALL CLEAR". After landing, reconnect:
 bash deploy/field-record.sh status
 bash deploy/field-record.sh stop    # seals the session; keep power on until it returns
 ```
 
 `start` runs `wr-map capture --start-mavros --announce` as the transient systemd
-user unit `wr-field-record`. It uses a 60 s warmup and records until stopped
-unless `--duration` is given. Unplugging or logging out does not stop it. This
+user unit `wr-field-record`. It uses no warmup, since the startup check already
+records 5 s of continuous data, and records until stopped unless `--duration`
+is given. Unplugging or logging out does not stop it. This
 needs `loginctl enable-linger` for the user, but not root.
 
-`start` returns only after the startup checks pass, which takes about 10 s.
-On 2026-11-22 it took 10.7 s: 1.5 s to start the container, 2.5 s for the owner
-check, 0.5 s for launch, and 5.3 s for the OAK to boot and publish. Before
-that it took 55 s.
-Ctrl+C or Ctrl+Z there only stops the waiting; `status` reports the session
-state. If the checks fail, `start` stops the unit and reports the failure.
+`start` shows each check as it passes, with a spinner naming the current
+step, and ends with `ALL CLEAR: recording. Safe to disconnect.` or
+`NOT RECORDING` with a reason. Disconnect only after the all-clear. It takes
+about 15 s: on 2026-11-22, 1.5 s to start the container, 2.5 s for the owner
+check, 0.5 s for launch, 5.3 s for the OAK to boot and publish, then 5 s of
+continuous data. It took 55 s before. `status` starts with the same verdict.
+Ctrl+Z is ignored while `start` and `stop` wait; Ctrl+C only stops the waiting.
 Running `stop` while the state is still `starting` aborts the session, which
 is then marked `failed`.
 
@@ -139,7 +140,7 @@ this host keeps no user journal.
 session sealed in about 20 s. Removing power before `stop` returns leaves the
 session unsealed.
 
-The start announcement plays on the vehicle buzzer when warmup ends. Its text
+The start announcement plays on the vehicle buzzer at the all-clear. Its text
 reaches QGroundControl only if PX4 forwards the Orin's messages
 (`MAV_1_FORWARD`), which is 0 on this vehicle as of 2026-11-22. A manual stop
 shuts down the session's MAVROS at the same time, so no stop announcement is

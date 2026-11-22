@@ -75,6 +75,7 @@ if Path(sys.argv[0]).name == 'camera_node' or args[:2] == ['bag', 'record']:
             nodes.append(time_node)
             streams.append((time_node.create_publisher(State, '/mavros/state', 1),
                             lambda: State(connected=True)))
+            streams.append((time_node.create_publisher(Imu, '/mavros/imu/data_raw', 1), Imu))
         executor = SingleThreadedExecutor()
         for ros_node in nodes:
             executor.add_node(ros_node)
@@ -99,7 +100,8 @@ elif args[:2] == ['bag', 'info']:
            'AMENT_PREFIX_PATH': f'{tmp_path}:{os.environ.get("AMENT_PREFIX_PATH", "")}',
            'WR_TEST_ROOT': str(tmp_path), 'WR_TEST_MODE': mode, 'WR_TEST_ROS2': real_ros2,
            # Keep this graph away from a live recorder; a silent driver fails readiness quickly.
-           'ROS_DOMAIN_ID': str(50 + os.getpid() % 40), 'WR_MAPPING_READY_TIMEOUT': '5'}
+           'ROS_DOMAIN_ID': str(50 + os.getpid() % 40), 'WR_MAPPING_READY_TIMEOUT': '5',
+           'WR_MAPPING_SOLID_SECONDS': '1'}
     command = ['bash', 'deploy/record-rosbag.sh', '--output', str(output),
         '--camera-only', '--warmup', '0', '--duration', '1' if mode == 'timed' else '0']
     if mode == 'calibration_interrupt':
