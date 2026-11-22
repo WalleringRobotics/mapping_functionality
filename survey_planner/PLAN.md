@@ -1,90 +1,159 @@
 # Survey planner: plan for review
 
-**Status:** the mission is defined in [Mission](#mission): a single forward-facing
-camera, with the aircraft's yaw planned so the camera stays on the target. **Phase 1
-as implemented on this branch (`wr-map survey-plan`) does not meet it**: it generates
-a nadir-camera survey with yaw along each leg (see
-[Phase 1 status](#phase-1-status)). The yaw design is the next work, before Phases 2
-to 4. Implementing agents should also read [NOTES.md](NOTES.md).
+**Status:** the mission is defined in [Mission](#mission): one fixed camera facing
+forward and about 30° down, two mission types (structure, ground), and the aircraft's
+yaw planned as part of each. **Phase 1 as implemented on this branch
+(`wr-map survey-plan`) assumes a nadir camera** and is wrong for this platform (see
+[Phase 1 status](#phase-1-status)). The design below is for review before more code is
+written. Implementing agents should also read [NOTES.md](NOTES.md).
 
 Both files are review documents and are removed when the last phase merges.
 
 ## Mission
 
-**The platform carries one camera, fixed to the airframe and facing forward. There is
-no gimbal. The only way to point the camera is to yaw the aircraft.**
+**The platform carries one camera, fixed to the airframe, facing forward and pitched
+about 30° below the horizon by the mount. There is no gimbal. The only way to point
+the camera is to yaw the aircraft, so the yaw is part of every plan.**
 
-The mission is therefore a flight path **and a yaw for every part of it**, planned
-together so that the camera stays on the target:
+There are two missions (operator, 2026-11-22):
 
-1. **Yaw is a planned output, not a side effect.** Every waypoint and every leg of a
-   generated plan carries the heading that puts the target in the frame. PX4's default
-   of yawing along the direction of travel (`MIS_YAWMODE` 0) is not acceptable: flying
-   past a target with the nose along the track images the horizon ahead, not the
-   target.
-2. **Yaw must match the motion.** As the aircraft moves along or around the target,
-   the heading sweeps at the rate that keeps the target at the same place in the
-   image. Images taken while the yaw does not match are useless: the target is out of
-   frame, or smeared. At the reviewed 1000 µs exposure and 4.79 mm lens (about
-   3093 px focal length), a yaw rate of 9.3 °/s that is not matched by the motion
-   moves the image 0.5 px during the exposure, which is the blur limit already used
-   for speed.
+| | Mission 1: structure | Mission 2: ground and low vegetation |
+|---|---|---|
+| Target | A building or other structure | A field; mostly small vegetation |
+| Yaw | **Must be planned.** Either the yaw sweeps to stay on the structure, or straight "fly-bys" with a fixed yaw | **Fixed for the whole grid.** No sweeping expected |
+| Path | Around or along the structure at a stand-off distance, at one or more heights | Parallel lines over the field |
+
+Rules for both:
+
+1. **Yaw is a planned output, not a side effect.** Every leg carries the heading that
+   puts the target in the frame, and the plan says how PX4 is commanded to hold it.
+2. **Yaw must match the motion.** Images taken while the heading does not match are
+   useless: the target is out of frame, or smeared. At the reviewed 1000 µs exposure
+   and 4.79 mm lens (3093 px focal length), an unmatched yaw rate of 9.3 °/s moves the
+   image 0.5 px during the exposure, which is the blur limit already used for speed.
 3. **A plan is tailored to three inputs**, without entering values by hand in
    QGroundControl:
 
    | Input | What it is | Where it comes from |
    |---|---|---|
-   | **Optics** | Sensor, focal length, **mounting (forward-facing, fixed, pitch angle)**, orientation, frame rate, fixed exposure, shutter type | Camera definition and capture profile in `configs/` |
+   | **Optics** | Sensor, focal length, **mounting (forward, fixed, measured pitch)**, orientation, frame rate, fixed exposure, shutter type | Camera definition and capture profile in `configs/` |
    | **Aircraft** | Vehicle type, speed limit, acceleration, **yaw rate and yaw acceleration limits**, acceptance radius, climb and descent rates, return height | A reviewed aircraft definition in `configs/` |
-   | **Target** | Where the target is and its extent, GSD or stand-off distance, overlaps, relief, target type, time budget | The request |
+   | **Target** | Mission type, boundary or structure outline and height, GSD or stand-off distance, overlaps, relief, time budget | The request |
 
 4. **The plan is checked for pointing before anyone loads it.** A plan is written only
-   if, for every frame the camera would take on a leg, the target is inside the frame
-   at the planned position and yaw, the yaw rate and yaw acceleration are within the
-   aircraft's limits, and blur from unmatched yaw and from motion is within the limit.
-   Coverage is then counted from those frames, as the coverage test does today for the
-   nadir case.
-5. **The review shows the pointing.** The review bundle, and later the map page, draw
-   the camera's view direction and footprint along the path, so the operator sees what
-   each part of the flight looks at.
+   if, for every frame the camera would take on a leg, the target is inside the usable
+   part of the frame at the planned position and yaw, the yaw rate and acceleration
+   are within the aircraft's limits, and blur is within the limit. Coverage is counted
+   from those frames.
+5. **The review shows the pointing:** view direction and footprint along the path.
 
-**Later, optional: follow mode.** The camera feed steers the yaw (and possibly the
-path) to keep a target in frame during flight. That is closed-loop control on the
-vehicle, a separate component with its own safety case. Everything in this plan is
-offline planning and stays that way; the planned-yaw mission above must not depend on
-it.
+**Later, optional: follow mode.** The camera feed steers the yaw to keep a target in
+frame during flight. That is closed-loop control on the vehicle, a separate component
+with its own safety case. The planned-yaw missions must not depend on it.
 
-**Then, as before:** a review page on satellite imagery and an MCP server so agents
-can drive the planner. **Later, optional:** aircraft values read from QGroundControl,
-a built-in agent, endurance/battery, terrain following, splitting a job across sorties.
+**Then, as before:** a review page on satellite imagery and an MCP server.
 
-### What is not yet designed
+### What the camera sees at 30° down
 
-The yaw requirement was stated in review on 2026-11-22, after Phase 1 was built. These
-are open and are designed before any more code is written:
+OAK RGB 12 MP (66.5° × 52.3° field of view), image width horizontal, 30 m above level
+ground:
 
-- **Target geometry.** The path depends on what the target is: a structure or facade
-  (orbit or parallel passes at a stand-off distance, camera level or slightly down), a
-  point of interest (orbit), or ground (which a forward camera can only image
-  obliquely, by its downward pitch). The camera's pitch angle is not recorded anywhere
-  in this repository.
-- **How PX4 is told the yaw.** Candidates: a region-of-interest command
-  (`MAV_CMD_DO_SET_ROI_LOCATION`) ahead of the legs, so PX4 yaws the vehicle towards
-  the target continuously; or an explicit yaw on every waypoint with closely spaced
-  waypoints. Which one PX4 honours on a multirotor without a gimbal, and how smoothly,
-  is to be verified in PX4 source and in SIH, not assumed. QGroundControl's Survey
-  item cannot carry a per-leg yaw, so the plan is likely simple waypoints or a
-  different pattern, and `wr-map survey-check` must be extended to accept and check
-  it.
-- **The existing camera definition contradicts the platform.**
-  `configs/qgc-oak-rgb-12mp.json` states that the OAK is mounted nadir and that PX4
-  must yaw along each leg, and `wr-map survey-check` enforces that. With a
-  forward-facing camera that definition, the checker's overlap and footprint rules,
-  and Phase 1's coverage test do not describe what the camera sees. The definition
-  needs a reviewed correction, including the measured pitch angle.
-- **Overlap.** For a forward or oblique view, overlap and GSD are set by stand-off
-  distance, angular step between frames around the target, and height steps, not by
-  ground footprint and line spacing.
+| Part of the frame | Angle below horizon | Ground distance ahead | Width seen | GSD across / along the ground |
+|---|---|---|---|---|
+| Bottom edge | 56.2° | 20 m | 43 m | 1.1 / 1.6 cm |
+| Centre | 30.0° | 52 m | 79 m | 1.9 / 3.9 cm |
+| Top edge | 3.8° | 448 m | — | useless |
+
+For comparison, a nadir camera at 30 m gives 0.97 cm. Consequences:
+
+- **Only the lower part of the frame is useful for ground.** Along-ground GSD passes
+  twice the nadir value 29 m ahead and three times at 42 m. The plan takes a GSD limit
+  and counts only the band of the frame inside it.
+- **The footprint is ahead of the aircraft, not under it.** Nothing closer than 20 m
+  ahead is seen at 30 m height. Lines must start that much earlier.
+- **The view direction matters.** Images of the same ground taken looking opposite
+  ways are 120° apart and will not match each other, least of all on vegetation.
+
+### Mission 2: ground, fixed yaw (proposal)
+
+- **One heading for the whole grid.** If the aircraft yawed along each leg, as PX4
+  does by default and Phase 1 assumes, neighbouring lines would look in opposite
+  directions and the side overlap between them would be useless. With a fixed heading
+  every image looks the same way; the aircraft flies alternate lines backwards.
+  *Alternative:* fly every line in the same direction and return empty, at about twice
+  the flight time.
+- **Rules that change from Phase 1:** footprint (a trapezoid ahead of the aircraft,
+  limited to the usable band), line spacing (from the band's narrowest width), frame
+  spacing (from the band's depth), line start and end (shifted by the look-ahead
+  distance, different for forward and backward lines), blur (lower than nadir at the
+  same speed, since the ground is further away), relief.
+- **Rules that carry over:** boundary import, speed and turnaround, fence, time budget
+  and alternatives, the independent coverage test (with the new footprint), bundle.
+- **Optional second grid** with the opposite heading, for the sides of vegetation the
+  first grid cannot see.
+
+### Mission 1: structure (proposal)
+
+Two patterns, both using the same pointing test:
+
+- **Yaw sweep (orbit).** The aircraft flies around the structure at a stand-off
+  distance, one loop per height, with the yaw held on the structure by a
+  region-of-interest command. Overlap comes from the angular step between frames and
+  the height step between loops.
+- **Fly-bys, fixed yaw.** Straight passes parallel to each face, flown sideways with
+  the heading fixed square to the face. Simpler to check and no yaw rate during
+  imaging, but each face is a separate set of passes and corners are covered less
+  well.
+
+Recommended order: fly-bys first (they share the fixed-yaw mechanism with mission 2),
+then the orbit.
+
+At 30° down the camera looks at a wall obliquely from above: a pass must be higher
+than the part of the wall it images, and the lowest part of a wall needs a larger
+stand-off. Roofs are well covered.
+
+### How PX4 is told the yaw
+
+Checked in PX4 v1.17.0 source (the version `sitl.yml` builds) and QGroundControl
+v5.1.5; **not yet flown in SIH**:
+
+- **Fixed yaw:** a waypoint with a yaw value (`param4`) is flown at that heading; PX4
+  uses the heading mode only when the waypoint's yaw is not set
+  (`FlightTaskAuto.cpp`). QGroundControl's Survey item cannot carry a yaw, so these
+  plans are simple waypoints, not a Survey item.
+- **Yaw on a point:** with `MIS_MNT_YAW_CTL` 0 (default) on a multirotor, an active
+  `MAV_CMD_DO_SET_ROI_LOCATION` makes PX4 recompute the heading towards that location
+  continuously during the mission (`MissionBase::heading_sp_update`). It stops
+  updating within the acceptance radius of the point.
+- **Yaw square to the path:** `MAV_CMD_DO_SET_ROI_WPNEXT_OFFSET` with a 90° yaw offset
+  is what QGroundControl's own Structure Scan writes, and PX4 applies the offset to
+  the vehicle heading.
+- **Rate limits:** `MPC_YAWRAUTO_MAX` (default 60 °/s) and `MPC_YAWRAUTO_ACC`
+  (default 20 °/s²). These go into the aircraft definition.
+- **The heading-mode parameter is `MPC_YAW_MODE` in v1.17.0.** This repository's
+  documents and camera definition call it `MIS_YAWMODE`, its older name.
+
+### Consequences for what exists
+
+- **`configs/qgc-oak-rgb-12mp.json` is wrong about the mounting.** It says nadir with
+  yaw along each leg. It needs a reviewed correction with the measured pitch ("about
+  30°" is not yet a measurement; a few degrees changes the footprint noticeably).
+- **`wr-map survey-check` checks the wrong geometry for this platform**, and accepts
+  only a Survey item. It needs to accept the waypoint plans above and check them with
+  the oblique footprint. `capture --survey-check` and `survey-legs` depend on it.
+- **Phase 1's design rules and coverage test use the nadir footprint.** They are
+  reworked for mission 2, not thrown away.
+
+### Open for the operator
+
+1. Mission 2: fixed heading with alternate lines flown backwards (recommended), or
+   all lines in the same direction at about twice the flight time?
+2. Mission 1: fly-bys first, then the orbit, as recommended?
+3. Is the nadir mounting in the camera definition simply out of date, or is there a
+   second mount? If the camera can also be mounted nadir, Phase 1 stays valid for
+   that mount.
+4. Can the pitch be measured (for example from the rig calibration) rather than taken
+   as 30°?
 
 ## Why in this repository
 
@@ -411,11 +480,13 @@ Upload and arming, airspace or site approval, terrain following in v1, ArduPilot
 
 ## Phase 1 status
 
-**Phase 1 plans a nadir-camera survey. With the platform's forward-facing camera its
-plans do not image the field and must not be flown for mapping.** The code is kept
-because the boundary import, plan writer, time-budget refusal, review bundle and the
-"independent test on the finished plan" structure carry over; the footprint, line
-layout and coverage rules do not.
+**Phase 1 plans a nadir-camera survey with yaw along each leg. With the platform's
+camera (forward, 30° down) the aircraft would image ground 20 m and more ahead of each
+line, coarser than planned and looking in opposite directions on neighbouring lines.
+Its coverage and overlap figures do not hold; do not fly its plans for mapping.** The
+boundary import, speed and turnaround rules, fence, time-budget refusal, review bundle
+and the independent test on the finished plan carry over to mission 2; the footprint,
+line placement and plan format change.
 
 Done, with tests, in `src/wallering_mapping/`:
 
