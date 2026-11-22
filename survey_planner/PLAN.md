@@ -1,30 +1,90 @@
 # Survey planner: plan for review
 
-**Status:** Phase 1 is implemented on this branch as `wr-map survey-plan`, except the
-PX4 SIH run (see [Phase 1 status](#phase-1-status)). The operator procedure is in
-[`docs/survey-planning.md`](../docs/survey-planning.md). This file remains the plan
-for Phases 2 to 4; implementing agents should also read [NOTES.md](NOTES.md).
+**Status:** the mission is defined in [Mission](#mission): a single forward-facing
+camera, with the aircraft's yaw planned so the camera stays on the target. **Phase 1
+as implemented on this branch (`wr-map survey-plan`) does not meet it**: it generates
+a nadir-camera survey with yaw along each leg (see
+[Phase 1 status](#phase-1-status)). The yaw design is the next work, before Phases 2
+to 4. Implementing agents should also read [NOTES.md](NOTES.md).
 
 Both files are review documents and are removed when the last phase merges.
 
-## Goal
+## Mission
 
-Generate a photogrammetry survey tailored to three things, without entering values by
-hand in QGroundControl, and show what it will achieve before anyone loads it:
+**The platform carries one camera, fixed to the airframe and facing forward. There is
+no gimbal. The only way to point the camera is to yaw the aircraft.**
 
-| Input | What it is | Where it comes from |
-|---|---|---|
-| **Optics** | Sensor, focal length, orientation, frame rate, fixed exposure, shutter type | `configs/qgc-oak-rgb-12mp.json`, `configs/oakd-ros.yaml` |
-| **Aircraft** | Vehicle type, speed limit, acceleration, acceptance radius, climb and descent rates, return height | A reviewed aircraft definition in `configs/` (new, below) |
-| **Target** | Boundary, GSD or height, overlaps, terrain relief, target type, time budget | The request |
+The mission is therefore a flight path **and a yaw for every part of it**, planned
+together so that the camera stays on the target:
 
-- **Core, first:** these three inputs → a QGroundControl `.plan` that passes
-  `wr-map survey-check` unmodified and an independent coverage test, plus a review
-  bundle of what will be flown.
-- **Then:** a review page that draws the plan and its predicted coverage on satellite
-  imagery, and an MCP server so agents can drive it.
-- **Later, optional:** aircraft values read from QGroundControl, a built-in agent,
-  endurance/battery, terrain following, splitting a field across sorties.
+1. **Yaw is a planned output, not a side effect.** Every waypoint and every leg of a
+   generated plan carries the heading that puts the target in the frame. PX4's default
+   of yawing along the direction of travel (`MIS_YAWMODE` 0) is not acceptable: flying
+   past a target with the nose along the track images the horizon ahead, not the
+   target.
+2. **Yaw must match the motion.** As the aircraft moves along or around the target,
+   the heading sweeps at the rate that keeps the target at the same place in the
+   image. Images taken while the yaw does not match are useless: the target is out of
+   frame, or smeared. At the reviewed 1000 µs exposure and 4.79 mm lens (about
+   3093 px focal length), a yaw rate of 9.3 °/s that is not matched by the motion
+   moves the image 0.5 px during the exposure, which is the blur limit already used
+   for speed.
+3. **A plan is tailored to three inputs**, without entering values by hand in
+   QGroundControl:
+
+   | Input | What it is | Where it comes from |
+   |---|---|---|
+   | **Optics** | Sensor, focal length, **mounting (forward-facing, fixed, pitch angle)**, orientation, frame rate, fixed exposure, shutter type | Camera definition and capture profile in `configs/` |
+   | **Aircraft** | Vehicle type, speed limit, acceleration, **yaw rate and yaw acceleration limits**, acceptance radius, climb and descent rates, return height | A reviewed aircraft definition in `configs/` |
+   | **Target** | Where the target is and its extent, GSD or stand-off distance, overlaps, relief, target type, time budget | The request |
+
+4. **The plan is checked for pointing before anyone loads it.** A plan is written only
+   if, for every frame the camera would take on a leg, the target is inside the frame
+   at the planned position and yaw, the yaw rate and yaw acceleration are within the
+   aircraft's limits, and blur from unmatched yaw and from motion is within the limit.
+   Coverage is then counted from those frames, as the coverage test does today for the
+   nadir case.
+5. **The review shows the pointing.** The review bundle, and later the map page, draw
+   the camera's view direction and footprint along the path, so the operator sees what
+   each part of the flight looks at.
+
+**Later, optional: follow mode.** The camera feed steers the yaw (and possibly the
+path) to keep a target in frame during flight. That is closed-loop control on the
+vehicle, a separate component with its own safety case. Everything in this plan is
+offline planning and stays that way; the planned-yaw mission above must not depend on
+it.
+
+**Then, as before:** a review page on satellite imagery and an MCP server so agents
+can drive the planner. **Later, optional:** aircraft values read from QGroundControl,
+a built-in agent, endurance/battery, terrain following, splitting a job across sorties.
+
+### What is not yet designed
+
+The yaw requirement was stated in review on 2026-11-22, after Phase 1 was built. These
+are open and are designed before any more code is written:
+
+- **Target geometry.** The path depends on what the target is: a structure or facade
+  (orbit or parallel passes at a stand-off distance, camera level or slightly down), a
+  point of interest (orbit), or ground (which a forward camera can only image
+  obliquely, by its downward pitch). The camera's pitch angle is not recorded anywhere
+  in this repository.
+- **How PX4 is told the yaw.** Candidates: a region-of-interest command
+  (`MAV_CMD_DO_SET_ROI_LOCATION`) ahead of the legs, so PX4 yaws the vehicle towards
+  the target continuously; or an explicit yaw on every waypoint with closely spaced
+  waypoints. Which one PX4 honours on a multirotor without a gimbal, and how smoothly,
+  is to be verified in PX4 source and in SIH, not assumed. QGroundControl's Survey
+  item cannot carry a per-leg yaw, so the plan is likely simple waypoints or a
+  different pattern, and `wr-map survey-check` must be extended to accept and check
+  it.
+- **The existing camera definition contradicts the platform.**
+  `configs/qgc-oak-rgb-12mp.json` states that the OAK is mounted nadir and that PX4
+  must yaw along each leg, and `wr-map survey-check` enforces that. With a
+  forward-facing camera that definition, the checker's overlap and footprint rules,
+  and Phase 1's coverage test do not describe what the camera sees. The definition
+  needs a reviewed correction, including the measured pitch angle.
+- **Overlap.** For a forward or oblique view, overlap and GSD are set by stand-off
+  distance, angular step between frames around the target, and height steps, not by
+  ground footprint and line spacing.
 
 ## Why in this repository
 
@@ -339,14 +399,23 @@ Later phases follow, each proposed as its own PR:
 - [ ] Unit tests for geometry and limits; checker round-trip; deterministic output
 - [ ] QGroundControl 5.1 opens a generated plan, shows the same transects and uploads the saved items unchanged; needs the operator's QGroundControl, which is not in CI
 - [ ] PX4 SIH flies a generated plan to completion, and at every leg entry the simulated aircraft is within tolerance of the line and of the commanded speed
+- [ ] Every generated plan carries a yaw for every leg, and passes a pointing test: target in frame for every frame on a leg, yaw rate within the aircraft's limits, blur within the limit
+- [ ] PX4 SIH shows the simulated aircraft's heading within tolerance of the planned yaw throughout every leg
 - [ ] `flight_ready` stays false; no interface uploads, arms or writes parameters
 
 ## Out of scope
 
 Upload and arming, airspace or site approval, terrain following in v1, ArduPilot Plane
-(which has its own handoff path), and corridor or structure scans.
+(which has its own handoff path), and camera-driven follow mode (see
+[Mission](#mission)).
 
 ## Phase 1 status
+
+**Phase 1 plans a nadir-camera survey. With the platform's forward-facing camera its
+plans do not image the field and must not be flown for mapping.** The code is kept
+because the boundary import, plan writer, time-budget refusal, review bundle and the
+"independent test on the finished plan" structure carry over; the footprint, line
+layout and coverage rules do not.
 
 Done, with tests, in `src/wallering_mapping/`:
 
@@ -389,31 +458,6 @@ Not done:
   workflow.
 - [ ] **QGroundControl opens a generated plan** and uploads the saved items unchanged.
   Needs the operator's QGroundControl.
-
-## Raised in review, not yet designed
-
-**Yaw towards the target, and a later follow mode.** The operator wants the aircraft
-to sweep its yaw to keep the camera on the target, with the camera feed possibly
-driving a follow mode later.
-
-This does not fit the survey generated here, and is recorded so it is not lost:
-
-- The reviewed camera definition is a **nadir** mount with the image width across the
-  track, and `survey-check` and the coverage test both rely on PX4 yawing along each
-  leg (`MIS_YAWMODE` 0). With a nadir camera, yaw does not change what is seen; it only
-  rotates the footprint, which would change the side overlap the plan guarantees.
-- Yaw towards a target matters when the camera looks forward or obliquely: an orbit or
-  facade pass around a structure, with a region-of-interest command holding the yaw.
-  That is a different mission type. `survey-check` refuses everything except a Survey
-  today, and "structure scans" are out of scope above.
-- A follow mode driven by the camera feed is closed-loop vehicle control. Every
-  interface here is offline by design; that would be a separate, on-vehicle component
-  with its own safety case.
-
-To design it, three things are needed from the operator: how the camera is mounted for
-those flights (nadir, fixed oblique, or gimbal), what the target is (a structure to
-orbit, or a field), and whether the oblique images are for the 3D model or for
-inspection.
 
 ## Decided in review, 2026-11-22
 

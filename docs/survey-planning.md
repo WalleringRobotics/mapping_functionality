@@ -250,6 +250,11 @@ imported and skipped counts per stream.
   They bound legs to within a fraction of a second, not exposure time.
 - Survey-leg selection does not qualify camera geolocation; timing and rig
   calibration remain separate.
+- **Generated plans are for a nadir camera with yaw along each leg.** The platform's
+  camera is fixed and forward-facing, so the aircraft's yaw has to be planned to keep
+  the camera on the target. `wr-map survey-plan` does not plan yaw yet; do not fly its
+  plans for mapping with the forward-facing camera. The requirement is in
+  [`survey_planner/PLAN.md`](../survey_planner/PLAN.md#mission).
 - Generated plans have not yet been opened in the operator's QGroundControl or flown
   in PX4 SIH. Coverage assumes a nadir camera, level flight, yaw along each leg and
   constant speed on the legs; it does not model wind, attitude or tracking error.
