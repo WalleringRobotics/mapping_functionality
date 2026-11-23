@@ -2,10 +2,17 @@
 
 **Status:** the mission is defined in [Mission](#mission): one fixed camera facing
 forward and about 30° down, two mission types (structure, ground), and the aircraft's
-yaw planned as part of each. **Phase 1 as implemented on this branch
-(`wr-map survey-plan`) assumes a nadir camera** and is wrong for this platform (see
-[Phase 1 status](#phase-1-status)). The design below is for review before more code is
-written. Implementing agents should also read [NOTES.md](NOTES.md).
+yaw planned as part of each.
+
+- **Mission 1, structure, fixed-yaw fly-bys: built** as `wr-map structure-plan`, with
+  an independent check and a mission view. Not yet flown in SIH or opened in
+  QGroundControl. See [Fly-by status](#fly-by-status) and
+  [the guide](../docs/structure-planning.md).
+- **Mission 1, yaw sweep (orbit): later**, by the operator's decision of 2026-11-23.
+- **Mission 2, ground: proposal only.** `wr-map survey-plan` (Phase 1) assumes a nadir
+  camera and is wrong for this platform (see [Phase 1 status](#phase-1-status)).
+
+Implementing agents should also read [NOTES.md](NOTES.md).
 
 Both files are review documents and are removed when the last phase merges.
 
@@ -105,8 +112,7 @@ Two patterns, both using the same pointing test:
   imaging, but each face is a separate set of passes and corners are covered less
   well.
 
-Recommended order: fly-bys first (they share the fixed-yaw mechanism with mission 2),
-then the orbit.
+Decided 2026-11-23: fly-bys are built first; the orbit is kept for later.
 
 At 30° down the camera looks at a wall obliquely from above: a pass must be higher
 than the part of the wall it images, and the lowest part of a wall needs a larger
@@ -148,7 +154,8 @@ v5.1.5; **not yet flown in SIH**:
 
 1. Mission 2: fixed heading with alternate lines flown backwards (recommended), or
    all lines in the same direction at about twice the flight time?
-2. Mission 1: fly-bys first, then the orbit, as recommended?
+2. ~~Mission 1: fly-bys first, then the orbit?~~ Answered 2026-11-23: build the
+   fly-bys, keep the yaw sweep for later.
 3. Is the nadir mounting in the camera definition simply out of date, or is there a
    second mount? If the camera can also be mounted nadir, Phase 1 stays valid for
    that mount.
@@ -529,6 +536,56 @@ Not done:
   workflow.
 - [ ] **QGroundControl opens a generated plan** and uploads the saved items unchanged.
   Needs the operator's QGroundControl.
+
+## Fly-by status
+
+Built on this branch, with tests, in `src/wallering_mapping/`:
+
+| Module | Content |
+|---|---|
+| `structure_check.py` | Independent test of a finished plan against the structure: simulated flight, every wall sample projected into every frame, clearance, yaw settling, time. Also the mount reader. `wr-map structure-check` |
+| `structure_design.py` | Rules: usable band, stand-off from GSD, pass heights, speed, margins |
+| `structure_route.py` | Faces, corner stops and the plan writer (plain waypoints with yaw) |
+| `structure_generate.py` | `plan_structure()`, review bundle, `wr-map structure-plan` |
+| `structure_mission.html` | The mission view, written into each bundle as `mission.html` |
+
+New reviewed inputs: `configs/oak-forward-mount.json` (pitch 30° ± 3°, design value)
+and two yaw limits in the aircraft definition.
+
+Decisions made while building it, for review:
+
+- **The top of the image is the useful part for a wall**, the opposite of the ground
+  case. The usable band runs from the top of the image down to a steepest usable ray
+  (45° below the horizon by default).
+- **Corners are stops, not passes.** With fixed-yaw passes alone, no image of one face
+  shares anything with the next and each face would reconstruct on its own. Stops on
+  an arc round each corner step the yaw by at most 30° and hold still for two frames
+  at each pass height.
+- **An odd number of passes per face**, so each face ends at its far corner. Where the
+  rules give an even number, one pass is added and the heights are evenly respaced.
+- **Pitch tolerance is part of the test.** Every rule uses the worse end of ± 3° and
+  the check runs at all three pitches.
+- **A line flown twice counts once.** The check counts distinct lines at least 1 m
+  apart, so repeating a pass cannot stand in for a missing one.
+- **Frames while climbing are not counted.** PX4 has no per-leg climb speed, and at
+  3 m/s the blur at 10 m stand-off is about 1 px. This is why corners use stops.
+- **Minimum flight height is 5 m** for fly-bys (a request value), not the 10 m the
+  Survey checker uses, because the foot of a wall cannot be seen from 10 m at a close
+  stand-off.
+- **The outline is flown as its convex hull.** Recessed walls are warned about, not
+  tested.
+
+Not done:
+
+- [ ] **PX4 SIH flight of a generated plan**, measuring heading against planned yaw on
+  every pass and at every stop. The yaw mechanism is read from source only.
+- [ ] **QGroundControl opens and uploads a generated plan** unchanged. Needs the
+  operator's QGroundControl.
+- [ ] **Camera pitch measured** on the airframe.
+- [ ] **Capture workflow:** `capture --survey-check` and `survey-legs` accept only
+  Survey plans. `review.json` already lists each pass's entry and exit items for it.
+- [ ] Roof, recessed walls, obstacles other than the structure, terrain at the base
+  other than one stated height.
 
 ## Decided in review, 2026-11-22
 

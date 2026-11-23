@@ -39,6 +39,7 @@ drivers and works offline.
    | `acceptance_radius_m` | `NAV_ACC_RAD` | Turnaround length; where frames stop before a leg exit |
    | `climb_m_s`, `descent_m_s` | `MPC_Z_V_AUTO_UP`, `MPC_Z_V_AUTO_DN` | Warned about if slower than the time estimate assumes |
    | `return_height_m` | `RTL_RETURN_ALT` | Refused above the height limit |
+   | `yaw_rate_deg_s`, `yaw_accel_deg_s2` | `MPC_YAWRAUTO_MAX`, `MPC_YAWRAUTO_ACC` | Time to turn between headings in [structure fly-bys](structure-planning.md) |
 
 2. Save the field outline as KML or GeoJSON (one polygon, no holes), or point at an
    existing `.plan` with one Survey.
@@ -256,6 +257,8 @@ imported and skipped counts per stream.
   this yet; its coverage and overlap figures do not hold for that camera, so do not
   fly its plans for mapping. The requirement and the proposed design are in
   [`survey_planner/PLAN.md`](../survey_planner/PLAN.md#mission).
+  For a structure, use [`wr-map structure-plan`](structure-planning.md), which plans
+  the yaw.
 - Generated plans have not yet been opened in the operator's QGroundControl or flown
   in PX4 SIH. Coverage assumes a nadir camera, level flight, yaw along each leg and
   constant speed on the legs; it does not model wind, attitude or tracking error.

@@ -167,6 +167,7 @@ simulated PX4 publishers. OAK/PX4 hardware remains outside automated coverage.
 - [Jetson setup and commissioning](docs/jetson-setup.md)
 - [Capture geometry and field procedure](docs/acquisition.md)
 - [Survey planning with QGroundControl](docs/survey-planning.md)
+- [Structure fly-bys with the fixed forward camera](docs/structure-planning.md)
 - [Postprocessing recipes, control formats and recovery](docs/postprocessing.md)
 - [Camera upgrades and remaining qualification](docs/roadmap.md)
 - [Primary references and confidence](docs/references.md)

@@ -124,8 +124,10 @@ Summarised from the operator's own request:
 
 All review questions were answered on 2026-11-22 and Phase 1 is implemented; see
 "Phase 1 status" in PLAN.md for what differs from the plan and what remains (the PX4
-SIH run and the operator's QGroundControl check). The yaw-towards-target and follow
-mode request is recorded there as not yet designed.
+SIH run and the operator's QGroundControl check). The platform's camera is fixed,
+forward and 30° down; the structure fly-bys for it are built (see "Fly-by status" in
+PLAN.md). The yaw-sweep orbit, the ground mission for this camera and follow mode are
+not.
 
 Local development note: this machine has no `python3-venv`. A working environment was
 made with `python3 -m venv --without-pip .venv` and
