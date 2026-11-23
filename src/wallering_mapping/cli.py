@@ -198,6 +198,14 @@ def parser():
     survey_plan = commands.add_parser("survey-plan",
                                       help="Generate a checked Survey plan from optics, aircraft and target")
     survey_plan_arguments(survey_plan)
+    from .structure_generate import add_arguments as structure_plan_arguments
+    structure_plan = commands.add_parser(
+        "structure-plan", help="Generate a checked fixed-yaw fly-by plan for a structure, with its mission view")
+    structure_plan_arguments(structure_plan)
+    from .structure_check import add_arguments as structure_check_arguments
+    structure_check = commands.add_parser(
+        "structure-check", help="Test a fly-by plan's pointing, clearance and time against a structure")
+    structure_check_arguments(structure_check)
     handoff = commands.add_parser("handoff-check", help="Audit design camera and capture budgets offline")
     handoff.add_argument("handoff", type=Path)
     handoff.add_argument("--output", type=Path, required=True)
@@ -248,6 +256,12 @@ def main(argv=None):
         elif args.command == "survey-plan":
             from .survey_generate import run
             result = run(args)
+            print(json.dumps(result, indent=2))
+            return 0 if result["passed"] else 2
+        elif args.command in ("structure-plan", "structure-check"):
+            from importlib import import_module
+            module = "structure_generate" if args.command == "structure-plan" else "structure_check"
+            result = import_module(f".{module}", __package__).run(args)
             print(json.dumps(result, indent=2))
             return 0 if result["passed"] else 2
         elif args.command == "survey-legs":
