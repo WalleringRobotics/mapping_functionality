@@ -9,5 +9,7 @@
   "acceptance_radius_m": null,
   "climb_m_s": null,
   "descent_m_s": null,
-  "return_height_m": null
+  "return_height_m": null,
+  "yaw_rate_deg_s": null,
+  "yaw_accel_deg_s2": null
 }

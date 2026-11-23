@@ -1,0 +1,14 @@
+{
+  "schema": "wallering.camera-mount/v1",
+  "schema_version": 1,
+  "name": "OAK RGB, fixed forward mount",
+  "direction": "forward",
+  "image_width": "horizontal",
+  "pitch_down_deg": 30.0,
+  "pitch_tolerance_deg": 3.0,
+  "pitch_source": "Mount design value stated by the operator on 2026-11-22; not measured on the airframe",
+  "notes": [
+    "The camera is fixed to the airframe and looks along the nose, pitched below the horizon. There is no gimbal: the aircraft's yaw points the camera.",
+    "Plans are tested at the pitch and at both ends of the tolerance. Replace both values when the pitch has been measured."
+  ]
+}

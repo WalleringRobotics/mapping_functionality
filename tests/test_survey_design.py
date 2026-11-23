@@ -10,7 +10,7 @@ TEMPLATE = REPO / "configs/px4-multirotor.template.json"
 AIRCRAFT = {"schema": "wallering.px4-multirotor/v1", "schema_version": 1, "aircraft_id": "hexa-test",
             "source": "synthetic test values", "vehicle_type": 13, "max_survey_speed_m_s": 5.0,
             "accel_m_s2": 3.0, "acceptance_radius_m": 2.0, "climb_m_s": 3.0, "descent_m_s": 1.0,
-            "return_height_m": 60.0}
+            "return_height_m": 60.0, "yaw_rate_deg_s": 60.0, "yaw_accel_deg_s2": 20.0}
 
 
 def write_aircraft(tmp_path, **changes):

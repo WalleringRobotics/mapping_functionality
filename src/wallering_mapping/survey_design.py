@@ -17,7 +17,9 @@ AIRCRAFT_FIELDS = {"max_survey_speed_m_s": ("MPC_XY_CRUISE", 0.5, 20.0),
                    "acceptance_radius_m": ("NAV_ACC_RAD", 0.1, 20.0),
                    "climb_m_s": ("MPC_Z_V_AUTO_UP", 0.2, 10.0),
                    "descent_m_s": ("MPC_Z_V_AUTO_DN", 0.2, 10.0),
-                   "return_height_m": ("RTL_RETURN_ALT", 0.0, 500.0)}
+                   "return_height_m": ("RTL_RETURN_ALT", 0.0, 500.0),
+                   "yaw_rate_deg_s": ("MPC_YAWRAUTO_MAX", 5.0, 360.0),
+                   "yaw_accel_deg_s2": ("MPC_YAWRAUTO_ACC", 5.0, 360.0)}
 
 
 def read_aircraft(path):
